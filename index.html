@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Casino du Pomodoro</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="felt">
+    <header class="banner">
+      <h1>🎰 Casino du Pomodoro</h1>
+      <p class="tagline">Tirez une activité, tenez le quota du jour.</p>
+    </header>
+
+    <section class="panel data-panel">
+      <h2>Données CSV</h2>
+      <p class="hint" id="fileStatus">Aucun fichier lié — les données sont en mémoire (exemple par défaut).</p>
+      <div class="row">
+        <button type="button" id="btnLinkFile" class="chip">Lier un fichier CSV</button>
+        <button type="button" id="btnSaveFile" class="chip secondary" disabled>Enregistrer</button>
+        <button type="button" id="btnExport" class="chip secondary">Exporter / télécharger</button>
+        <label class="chip secondary file-label">
+          Importer
+          <input type="file" id="fileImport" accept=".csv,text/csv" hidden />
+        </label>
+      </div>
+    </section>
+
+    <section class="panel settings-panel">
+      <h2>Paramètres de la journée</h2>
+      <div class="grid-settings">
+        <label>Session min (min)
+          <input type="number" id="minSession" min="1" max="120" value="15" />
+        </label>
+        <label>Session max (min)
+          <input type="number" id="maxSession" min="1" max="180" value="40" />
+        </label>
+        <label>Début pause déjeuner
+          <input type="time" id="lunchStart" value="12:30" />
+        </label>
+        <label>Fin pause déjeuner
+          <input type="time" id="lunchEnd" value="13:30" />
+        </label>
+        <label>Fin de journée
+          <input type="time" id="dayEnd" value="17:00" />
+        </label>
+      </div>
+    </section>
+
+    <section class="panel activities-panel">
+      <h2>Activités</h2>
+      <form id="activityForm" class="row add-activity">
+        <input type="text" id="newActivityName" placeholder="Nom" required />
+        <input type="number" id="newActivityMinutes" placeholder="Objectif (min/jour)" min="1" required />
+        <button type="submit" class="chip">Ajouter</button>
+      </form>
+      <ul id="activityList" class="activity-list"></ul>
+    </section>
+
+    <section class="panel casino-panel">
+      <h2>Table de jeu</h2>
+      <p id="dayMessage" class="day-message"></p>
+      <div id="drawResult" class="draw-result" hidden>
+        <span class="label">Activité tirée</span>
+        <span id="drawnName" class="drawn-name"></span>
+      </div>
+      <div class="row actions">
+        <button type="button" id="btnDraw" class="chip gold">Tirer / demander l’activité</button>
+        <button type="button" id="btnStart" class="chip" disabled>Démarrer le chrono</button>
+        <button type="button" id="btnValidate" class="chip success" disabled>Valider la session</button>
+      </div>
+      <div class="timer-block">
+        <span id="timerDisplay" class="timer">00:00</span>
+        <span id="timerHint" class="timer-hint">Entre <span id="hintMin">15</span> et <span id="hintMax">40</span> min recommandées</span>
+      </div>
+    </section>
+
+    <section class="panel log-panel">
+      <h2>Sessions du jour</h2>
+      <ul id="sessionLog" class="session-log"></ul>
+    </section>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

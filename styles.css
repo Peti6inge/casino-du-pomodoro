@@ -1,0 +1,264 @@
+:root {
+  --felt: #0d5c38;
+  --felt-dark: #08442a;
+  --gold: #f0c14b;
+  --gold-dark: #c9a227;
+  --cream: #fff8e7;
+  --red: #b91c1c;
+  --text: #f5f5f4;
+  --muted: #a8c5b5;
+  --radius: 12px;
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: radial-gradient(ellipse at top, #1a7a4c 0%, #052e1c 70%);
+  color: var(--text);
+}
+
+.felt {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+}
+
+.banner {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.banner h1 {
+  margin: 0;
+  font-size: clamp(1.75rem, 5vw, 2.5rem);
+  color: var(--gold);
+  text-shadow: 0 2px 0 var(--gold-dark);
+}
+
+.tagline {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+}
+
+.panel {
+  background: linear-gradient(145deg, var(--felt) 0%, var(--felt-dark) 100%);
+  border: 3px solid var(--gold-dark);
+  border-radius: var(--radius);
+  padding: 1rem 1.15rem;
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow);
+}
+
+.panel h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  color: var(--gold);
+}
+
+.hint {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 0 0 0.75rem;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.chip {
+  border: 2px solid var(--gold);
+  background: var(--red);
+  color: var(--cream);
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chip.secondary {
+  background: var(--felt-dark);
+}
+
+.chip.gold {
+  background: linear-gradient(180deg, #ffd76a, var(--gold-dark));
+  color: #3d2910;
+}
+
+.chip.success {
+  background: #15803d;
+}
+
+.file-label {
+  display: inline-flex;
+  align-items: center;
+}
+
+.grid-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.grid-settings label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="time"] {
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--gold-dark);
+  background: #0a3d26;
+  color: var(--cream);
+}
+
+.add-activity input[type="text"] {
+  flex: 1;
+  min-width: 120px;
+}
+
+.add-activity input[type="number"] {
+  width: 110px;
+}
+
+.activity-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.activity-item {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid rgba(240, 193, 75, 0.25);
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+}
+
+.progress-wrap {
+  min-width: 140px;
+}
+
+.progress-bar {
+  height: 10px;
+  background: #063220;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold-dark), var(--gold));
+  transition: width 0.3s ease;
+}
+
+.progress-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.btn-icon {
+  background: transparent;
+  border: 1px solid var(--muted);
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.day-message {
+  font-size: 0.95rem;
+  color: var(--cream);
+  margin: 0 0 0.75rem;
+}
+
+.draw-result {
+  text-align: center;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius);
+  border: 2px dashed var(--gold);
+}
+
+.draw-result .label {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.drawn-name {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--gold);
+}
+
+.actions {
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.timer-block {
+  text-align: center;
+}
+
+.timer {
+  display: block;
+  font-size: 3rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--cream);
+  font-weight: 700;
+}
+
+.timer-hint {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.session-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.9rem;
+}
+
+.session-log li {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.session-log li:last-child {
+  border-bottom: none;
+}
+
+@media (max-width: 520px) {
+  .activity-item {
+    grid-template-columns: 1fr;
+  }
+}
