@@ -3,84 +3,240 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#6c3ff2" />
   <title>Casino du Pomodoro</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="felt">
-    <header class="banner">
-      <h1>🎰 Casino du Pomodoro</h1>
-      <p class="tagline">Tirez une activité, tenez le quota du jour.</p>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Casino du Pomodoro">
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <span>
+          <strong>Casino du Pomodoro</strong>
+          <small>Fais tourner ta journée</small>
+        </span>
+      </a>
+      <nav class="view-switcher" aria-label="Navigation principale">
+        <button class="nav-pill is-active" type="button" data-view="game" aria-pressed="true">
+          <span aria-hidden="true">✦</span> Jeu
+        </button>
+        <button class="nav-pill" type="button" data-view="settings" aria-pressed="false">
+          <span aria-hidden="true">⚙</span> Paramètres
+        </button>
+      </nav>
     </header>
 
-    <section class="panel data-panel">
-      <h2>Données CSV</h2>
-      <p class="hint" id="fileStatus">Aucun fichier lié — les données sont en mémoire (exemple par défaut).</p>
-      <div class="row">
-        <button type="button" id="btnLinkFile" class="chip">Lier un fichier CSV</button>
-        <button type="button" id="btnSaveFile" class="chip secondary" disabled>Enregistrer</button>
-        <button type="button" id="btnExport" class="chip secondary">Exporter / télécharger</button>
-        <label class="chip secondary file-label">
-          Importer
-          <input type="file" id="fileImport" accept=".csv,text/csv" hidden />
-        </label>
-      </div>
-    </section>
+    <main>
+      <section id="gameView" class="view">
+        <div class="day-strip">
+          <div>
+            <span class="eyebrow">Temps jouable restant</span>
+            <strong id="dayCountdown" class="day-countdown">—</strong>
+          </div>
+          <div class="day-strip-status">
+            <span id="dayStateDot" class="status-dot"></span>
+            <span id="dayState">Calcul en cours…</span>
+          </div>
+        </div>
 
-    <section class="panel settings-panel">
-      <h2>Paramètres de la journée</h2>
-      <div class="grid-settings">
-        <label>Session min (min)
-          <input type="number" id="minSession" min="1" max="120" value="15" />
-        </label>
-        <label>Session max (min)
-          <input type="number" id="maxSession" min="1" max="180" value="40" />
-        </label>
-        <label>Début pause déjeuner
-          <input type="time" id="lunchStart" value="12:30" />
-        </label>
-        <label>Fin pause déjeuner
-          <input type="time" id="lunchEnd" value="13:30" />
-        </label>
-        <label>Fin de journée
-          <input type="time" id="dayEnd" value="17:00" />
-        </label>
-      </div>
-    </section>
+        <section class="draw-stage" aria-labelledby="drawTitle">
+          <div class="sprinkle sprinkle-a" aria-hidden="true"></div>
+          <div class="sprinkle sprinkle-b" aria-hidden="true"></div>
+          <div class="draw-copy">
+            <span class="eyebrow light">La roue décide</span>
+            <h1 id="drawTitle">Quelle sera ta prochaine mission ?</h1>
+            <p id="dayMessage">Ajoute tes activités, puis laisse le hasard organiser ta journée.</p>
+          </div>
 
-    <section class="panel activities-panel">
-      <h2>Activités</h2>
-      <form id="activityForm" class="row add-activity">
-        <input type="text" id="newActivityName" placeholder="Nom" required />
-        <input type="number" id="newActivityMinutes" placeholder="Objectif (min/jour)" min="1" required />
-        <button type="submit" class="chip">Ajouter</button>
-      </form>
-      <ul id="activityList" class="activity-list"></ul>
-    </section>
+          <div id="drawResult" class="draw-result" hidden>
+            <div id="drawIcon" class="activity-orb" aria-hidden="true">✦</div>
+            <div>
+              <span id="drawCategory" class="result-category">Mission</span>
+              <h2 id="drawnName">—</h2>
+              <p>Session proposée : <strong id="plannedDuration">—</strong></p>
+            </div>
+            <span id="urgentBadge" class="urgent-badge" hidden>Priorité absolue</span>
+          </div>
 
-    <section class="panel casino-panel">
-      <h2>Table de jeu</h2>
-      <p id="dayMessage" class="day-message"></p>
-      <div id="drawResult" class="draw-result" hidden>
-        <span class="label">Activité tirée</span>
-        <span id="drawnName" class="drawn-name"></span>
-      </div>
-      <div class="row actions">
-        <button type="button" id="btnDraw" class="chip gold">Tirer / demander l’activité</button>
-        <button type="button" id="btnStart" class="chip" disabled>Démarrer le chrono</button>
-        <button type="button" id="btnValidate" class="chip success" disabled>Valider la session</button>
-      </div>
-      <div class="timer-block">
-        <span id="timerDisplay" class="timer">00:00</span>
-        <span id="timerHint" class="timer-hint">Entre <span id="hintMin">15</span> et <span id="hintMax">40</span> min recommandées</span>
-      </div>
-    </section>
+          <div id="timerStage" class="timer-stage" hidden>
+            <div id="timerRing" class="timer-ring">
+              <div>
+                <span id="timerDisplay" class="timer">00:00</span>
+                <small id="timerTarget">sur —</small>
+              </div>
+            </div>
+            <p id="timerMessage">Le chrono continue tant que tu ne clôtures pas la session.</p>
+          </div>
 
-    <section class="panel log-panel">
-      <h2>Sessions du jour</h2>
-      <ul id="sessionLog" class="session-log"></ul>
-    </section>
+          <div class="primary-actions">
+            <button type="button" id="btnDraw" class="game-button game-button-primary">
+              <span aria-hidden="true">✦</span> Lancer la roue
+            </button>
+            <button type="button" id="btnStart" class="game-button game-button-start" disabled>
+              Démarrer
+            </button>
+            <button type="button" id="btnValidate" class="game-button game-button-finish" disabled>
+              Clôturer la session
+            </button>
+          </div>
+        </section>
+
+        <section class="activity-section" aria-labelledby="requiredTitle">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker coral">À accomplir</span>
+              <h2 id="requiredTitle">Missions obligatoires</h2>
+            </div>
+            <span id="requiredSummary" class="summary-chip">—</span>
+          </div>
+          <div id="requiredList" class="activity-grid"></div>
+        </section>
+
+        <section class="activity-section" aria-labelledby="optionalTitle">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker mint">Bonus surprise</span>
+              <h2 id="optionalTitle">Activités facultatives</h2>
+            </div>
+            <span id="optionalSummary" class="summary-chip">—</span>
+          </div>
+          <div id="optionalList" class="activity-grid"></div>
+        </section>
+
+        <details id="bannedPanel" class="banned-panel">
+          <summary>
+            <span>Activités en réserve</span>
+            <span id="bannedCount" class="count-bubble">0</span>
+          </summary>
+          <div id="bannedList" class="banned-list"></div>
+        </details>
+
+        <section class="history-card" aria-labelledby="historyTitle">
+          <div class="section-heading compact">
+            <h2 id="historyTitle">Parties du jour</h2>
+            <span id="historyTotal" class="summary-chip">0 min</span>
+          </div>
+          <ol id="sessionLog" class="session-log"></ol>
+        </section>
+      </section>
+
+      <section id="settingsView" class="view" hidden>
+        <header class="settings-header">
+          <span class="eyebrow">Coulisses du jeu</span>
+          <h1>Prépare ta journée</h1>
+          <p>Ces règles pilotent les probabilités et le temps réellement disponible.</p>
+        </header>
+
+        <div class="settings-layout">
+          <form id="scheduleForm" class="settings-card">
+            <div class="card-title">
+              <span class="card-icon purple" aria-hidden="true">◷</span>
+              <div>
+                <h2>Rythme de la journée</h2>
+                <p>Le maximum doit valoir au moins deux fois le minimum.</p>
+              </div>
+            </div>
+            <div class="form-grid">
+              <label>Session minimale
+                <span class="input-with-unit"><input type="number" id="minSession" min="1" required /><span>min</span></span>
+              </label>
+              <label>Session maximale
+                <span class="input-with-unit"><input type="number" id="maxSession" min="2" required /><span>min</span></span>
+              </label>
+              <label>Début de pause
+                <input type="time" id="pauseStart" required />
+              </label>
+              <label>Fin de pause
+                <input type="time" id="pauseEnd" required />
+              </label>
+              <label>Fin de journée
+                <input type="time" id="dayEnd" required />
+              </label>
+            </div>
+            <p id="settingsError" class="form-error" role="alert"></p>
+            <button type="submit" class="soft-button purple">Enregistrer les règles</button>
+          </form>
+
+          <section class="settings-card">
+            <div class="card-title">
+              <span class="card-icon coral" aria-hidden="true">＋</span>
+              <div>
+                <h2>Nouvelle activité</h2>
+                <p>Obligatoire avec objectif, ou facultative avec plafond optionnel.</p>
+              </div>
+            </div>
+            <form id="activityForm" class="activity-form">
+              <label>Nom
+                <input type="text" id="newActivityName" maxlength="80" placeholder="Ex. Lecture" required />
+              </label>
+              <label>Type
+                <select id="newActivityCategory">
+                  <option value="required">Obligatoire</option>
+                  <option value="optional">Facultative</option>
+                </select>
+              </label>
+              <label id="activityDurationLabel">Objectif quotidien
+                <span class="input-with-unit"><input type="number" id="newActivityDuration" min="1" required /><span>min</span></span>
+                <small id="activityDurationHint">Durée à atteindre exactement chaque jour.</small>
+              </label>
+              <button type="submit" class="soft-button coral">Ajouter au jeu</button>
+            </form>
+          </section>
+        </div>
+
+        <section class="settings-card wide">
+          <div class="card-title">
+            <span class="card-icon mint" aria-hidden="true">☰</span>
+            <div>
+              <h2>Ordre et disponibilité</h2>
+              <p>En cas d’urgence, la première mission obligatoire active gagne toujours.</p>
+            </div>
+          </div>
+          <div id="activityManager" class="activity-manager"></div>
+        </section>
+
+        <div class="settings-layout">
+          <section class="settings-card">
+            <div class="card-title">
+              <span class="card-icon yellow" aria-hidden="true">⇄</span>
+              <div>
+                <h2>Sauvegarde</h2>
+                <p id="fileStatus">Sauvegarde automatique locale active.</p>
+              </div>
+            </div>
+            <div class="button-cluster">
+              <button type="button" id="btnLinkFile" class="soft-button yellow">Lier un CSV</button>
+              <button type="button" id="btnSaveFile" class="soft-button neutral" disabled>Synchroniser</button>
+              <button type="button" id="btnExport" class="soft-button neutral">Exporter</button>
+              <label class="soft-button neutral file-label">Importer
+                <input type="file" id="fileImport" accept=".csv,text/csv" hidden />
+              </label>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <div class="card-title">
+              <span class="card-icon blue" aria-hidden="true">♬</span>
+              <div>
+                <h2>Notifications</h2>
+                <p id="notificationStatus">Active-les pour être prévenu une minute avant la fin.</p>
+              </div>
+            </div>
+            <button type="button" id="btnNotifications" class="soft-button blue">Activer les notifications</button>
+          </section>
+        </div>
+      </section>
+    </main>
   </div>
+
+  <div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+  <div id="confetti" class="confetti" aria-hidden="true"></div>
+
+  <script src="logic.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
