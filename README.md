@@ -1,54 +1,86 @@
 # Casino du Pomodoro
 
-Minuteur pomodoro « casino » : les activités du jour sont tirées au sort sous contraintes de quotas et d’horaires.
+Un organiseur de journée ludique : la roue choisit une activité et une durée de session tout en protégeant les objectifs obligatoires.
 
-Application **100 % front-end** (HTML, CSS, JavaScript), prévue pour **GitHub Pages** sans étape de build.
+L’application est entièrement front-end (HTML, CSS et JavaScript), sans dépendance ni étape de build. Elle peut être publiée telle quelle sur GitHub Pages.
 
 ## Lancer en local
 
-Ouvrez `index.html` dans le navigateur, ou servez le dossier avec un serveur statique simple :
-
 ```bash
-python -m http.server 8080
+python3 -m http.server 8080
 ```
 
-Puis ouvrez `http://localhost:8080`.
+Puis ouvrir [http://localhost:8080](http://localhost:8080).
 
-> L’API **File System Access** (lier un fichier CSV sur le disque) nécessite un contexte sécurisé (HTTPS ou localhost) et un navigateur compatible (Chrome, Edge, Opera). Sinon, utilisez **Importer** / **Exporter** pour le fichier `casino-du-pomodoro.csv`.
+Les notifications système et l’API File System Access nécessitent `localhost` ou HTTPS. Chrome et Edge offrent le support le plus complet pour la liaison directe d’un CSV.
 
-## Persistance CSV
+## Fonctionnement
 
-Un seul fichier regroupe :
+### Activités obligatoires
 
-| Type `type` | Rôle |
-|-------------|------|
-| `activity`  | Nom, objectif journalier (min), temps déjà fait aujourd’hui |
-| `setting`   | Sessions min/max, pause déjeuner, fin de journée |
-| `session`   | Historique des sessions du jour |
-| `meta`      | Date du fichier (réinitialisation des compteurs au changement de jour) |
+- Chaque activité possède un objectif quotidien exact.
+- La progression visible est plafonnée à 100 %, même si une session réelle dépasse le reliquat.
+- Tant que tous les objectifs restent réalisables, la probabilité de tirer la catégorie obligatoire vaut :
 
-- **Mode recommandé** : bouton *Lier un fichier CSV* (écriture automatique après chaque modification).
-- **Repli** : export téléchargé + import manuel.
+  ```text
+  temps obligatoire restant / temps ouvrable restant
+  ```
 
-## Règles métier (v1)
+- Dans cette catégorie, chaque activité est pondérée par son propre temps restant.
+- Si tous les objectifs ne peuvent plus être terminés avant la fin de journée, la première activité obligatoire active et inachevée est imposée jusqu’à sa complétion.
 
-- Paramètres par défaut : session 15–40 min, déjeuner 12:30–13:30, fin de journée 17:00 (modifiables).
-- Pas de démarrage de session pendant la pause déjeuner ni après l’heure de fin (affichage d’un message).
-- **Tirage** : parmi les activités qui ont encore du quota, choix uniforme si le temps ouvrable restant jusqu’à la fin de journée (hors déjeuner) suffit pour tous les quotas restants ; sinon, seules les activités dont le quota individuel restant tient dans ce temps restent éligibles.
-- Après validation d’une session, la durée est ajoutée au quota de l’activité et enregistrée dans le CSV, puis un **nouveau tirage** est proposé avec les mêmes règles.
-- Les sessions en cours sont arrondies à la **minute entière** à la validation ; min/max appliqués sur cette durée (choix par défaut : pas de validation en dessous du min ni au-dessus du max).
+### Activités facultatives
+
+- Elles peuvent avoir un plafond quotidien, ou rester sans limite.
+- Plus une activité a déjà reçu de temps aujourd’hui, plus sa probabilité diminue.
+- Une même activité facultative ne peut pas être tirée deux fois de suite tant qu’une alternative est éligible.
+- Un reliquat inférieur à la durée minimale peut être proposé tel quel.
+
+### Durée et chrono
+
+- Une durée prévisionnelle entière est tirée entre les limites configurées.
+- Une session obligatoire ne peut pas laisser un reliquat non nul inférieur au minimum.
+- La durée maximale doit être au moins égale à deux fois la durée minimale.
+- Le chrono repose sur l’heure réelle et reprend après une actualisation.
+- La clôture reste manuelle : la durée réelle arrondie à la minute est souveraine, même avant ou après l’échéance prévue.
+- Une alerte interne, et si autorisé une notification système, est envoyée une minute avant la fin puis à l’échéance.
+
+Le temps ouvrable est recalculé avec le timestamp courant à chaque tirage. La pause restante est déduite et aucun tirage ne démarre pendant la pause ou après la fin de journée.
+
+## Persistance
+
+`localStorage` est la source principale : paramètres, activités, ordre, bannissements, historique et session active sont enregistrés après chaque mutation.
+
+Le changement de date remet implicitement les compteurs à zéro, car toutes les progressions sont calculées depuis les sessions du jour. La configuration et l’historique restent conservés.
+
+Le CSV sert de sauvegarde et de moyen de transfert :
+
+- export manuel à tout moment ;
+- import du format V2 ;
+- import rétrocompatible du format V1 ;
+- synchronisation automatique pendant la session navigateur lorsqu’un fichier est lié.
+
+Le navigateur ne garantit pas la conservation de l’autorisation d’écriture d’un fichier lié après sa fermeture. La sauvegarde locale continue donc de fonctionner indépendamment.
+
+## Tests
+
+Le moteur métier est isolé dans `logic.js` et utilise uniquement des fonctions déterministes injectables.
+
+```bash
+node --test tests/logic.test.js
+```
+
+Les tests couvrent le temps ouvrable, les pondérations, le mode urgence, l’anti-répétition, les plafonds, les reliquats et la validation des paramètres.
 
 ## Structure
 
+```text
+index.html          interface Jeu et Paramètres
+styles.css          thème responsive et animations
+logic.js            moteur temporel et probabiliste
+app.js              interface, chrono, stockage et CSV
+tests/logic.test.js tests unitaires sans dépendance
 ```
-index.html   — interface
-styles.css   — thème « casino »
-app.js       — logique et CSV
-```
-
-## Déploiement GitHub Pages
-
-Paramètres du dépôt → Pages → branche `main`, dossier racine (`/`).
 
 ## Licence
 

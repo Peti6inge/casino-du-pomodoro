@@ -1,613 +1,1016 @@
-/**
- * Casino du Pomodoro — v1 (front-end only)
- * CSV: activités, paramètres et journal de sessions dans un seul fichier.
- */
+"use strict";
 
-const CSV_HEADER = "type,name,num1,num2,text";
-
+const Logic = window.CasinoLogic;
+const STORAGE_KEY = "casino-du-pomodoro:v2";
+const STATE_VERSION = 2;
 const DEFAULT_SETTINGS = {
   minSession: 15,
   maxSession: 40,
-  lunchStart: "12:30",
-  lunchEnd: "13:30",
+  pauseStart: "12:30",
+  pauseEnd: "13:30",
   dayEnd: "17:00",
 };
 
 const DEFAULT_ACTIVITIES = [
-  { name: "Activité A", dailyTarget: 60, doneToday: 0 },
-  { name: "Activité B", dailyTarget: 60, doneToday: 0 },
+  {
+    id: "focus-profond",
+    name: "Focus profond",
+    category: Logic.CATEGORY_REQUIRED,
+    targetMinutes: 60,
+    dailyCap: null,
+    banned: false,
+  },
+  {
+    id: "mission-principale",
+    name: "Mission principale",
+    category: Logic.CATEGORY_REQUIRED,
+    targetMinutes: 45,
+    dailyCap: null,
+    banned: false,
+  },
+  {
+    id: "lecture",
+    name: "Lecture",
+    category: Logic.CATEGORY_OPTIONAL,
+    targetMinutes: null,
+    dailyCap: 45,
+    banned: false,
+  },
+  {
+    id: "pause-creative",
+    name: "Pause créative",
+    category: Logic.CATEGORY_OPTIONAL,
+    targetMinutes: null,
+    dailyCap: null,
+    banned: false,
+  },
 ];
 
-let settings = { ...DEFAULT_SETTINGS };
-let activities = DEFAULT_ACTIVITIES.map((a) => ({ ...a }));
-let sessionsToday = [];
-let csvFileHandle = null;
-let canSaveToHandle = false;
-
-let drawnActivity = null;
-let session = {
-  running: false,
-  startedAt: null,
-  elapsedMs: 0,
-  tickId: null,
-};
-
-let todayKey = todayDateKey();
-
 const $ = (id) => document.getElementById(id);
+const clone = (value) => JSON.parse(JSON.stringify(value));
 
-function todayDateKey() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+let state = loadState();
+let currentDay = "";
+let linkedFileHandle = null;
+let fileWriteQueue = Promise.resolve();
+let uiMessage = "";
+
+function makeId(name = "activité") {
+  const slug = name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 35);
+  const suffix = globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(36).slice(2, 10);
+  return `${slug || "activite"}-${suffix}`;
 }
 
-function parseTimeToMinutes(timeStr) {
-  const [h, m] = timeStr.split(":").map(Number);
-  return h * 60 + m;
+function defaultState() {
+  return {
+    version: STATE_VERSION,
+    settings: { ...DEFAULT_SETTINGS },
+    activities: clone(DEFAULT_ACTIVITIES),
+    sessions: [],
+    activeDraw: null,
+    activeSession: null,
+    lastOptionalActivityId: null,
+  };
 }
 
-function minutesNow(date = new Date()) {
-  return date.getHours() * 60 + date.getMinutes();
+function normalizeState(candidate) {
+  const fallback = defaultState();
+  if (!candidate || typeof candidate !== "object") return fallback;
+  return {
+    version: STATE_VERSION,
+    settings: { ...DEFAULT_SETTINGS, ...(candidate.settings || {}) },
+    activities: Array.isArray(candidate.activities)
+      ? candidate.activities.map((activity) => ({
+          id: activity.id || makeId(activity.name),
+          name: String(activity.name || "Activité"),
+          category:
+            activity.category === Logic.CATEGORY_OPTIONAL
+              ? Logic.CATEGORY_OPTIONAL
+              : Logic.CATEGORY_REQUIRED,
+          targetMinutes:
+            activity.category === Logic.CATEGORY_OPTIONAL
+              ? null
+              : Math.max(1, Number(activity.targetMinutes) || 1),
+          dailyCap:
+            activity.category === Logic.CATEGORY_OPTIONAL && activity.dailyCap != null
+              ? Math.max(1, Number(activity.dailyCap) || 1)
+              : null,
+          banned: Boolean(activity.banned),
+        }))
+      : fallback.activities,
+    sessions: Array.isArray(candidate.sessions)
+      ? candidate.sessions.filter((session) => session && session.date)
+      : [],
+    activeDraw: candidate.activeDraw || null,
+    activeSession: candidate.activeSession || null,
+    lastOptionalActivityId: candidate.lastOptionalActivityId || null,
+  };
 }
 
-function ensureToday() {
-  const key = todayDateKey();
-  if (key !== todayKey) {
-    todayKey = key;
-    activities.forEach((a) => {
-      a.doneToday = 0;
-    });
-    sessionsToday = [];
-    drawnActivity = null;
-    stopTimer();
-    persistSoon();
+function loadState() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? normalizeState(JSON.parse(saved)) : defaultState();
+  } catch (error) {
+    console.warn("Impossible de lire la sauvegarde locale.", error);
+    return defaultState();
   }
 }
 
-function isLunchTime(date = new Date()) {
-  const m = minutesNow(date);
-  const start = parseTimeToMinutes(settings.lunchStart);
-  const end = parseTimeToMinutes(settings.lunchEnd);
-  return m >= start && m < end;
-}
-
-function isAfterDayEnd(date = new Date()) {
-  return minutesNow(date) >= parseTimeToMinutes(settings.dayEnd);
-}
-
-function availableMinutesUntilDayEnd(date = new Date()) {
-  const now = minutesNow(date);
-  const dayEnd = parseTimeToMinutes(settings.dayEnd);
-  if (now >= dayEnd) return 0;
-
-  const lunchStart = parseTimeToMinutes(settings.lunchStart);
-  const lunchEnd = parseTimeToMinutes(settings.lunchEnd);
-
-  const rangeStart = now;
-  const rangeEnd = dayEnd;
-  const overlapStart = Math.max(rangeStart, lunchStart);
-  const overlapEnd = Math.min(rangeEnd, lunchEnd);
-  const lunchOverlap = Math.max(0, overlapEnd - overlapStart);
-
-  return Math.max(0, dayEnd - now - lunchOverlap);
-}
-
-function remainingMinutes(activity) {
-  return Math.max(0, activity.dailyTarget - activity.doneToday);
-}
-
-function eligibleActivitiesForDraw() {
-  ensureToday();
-  const withWork = activities.filter((a) => remainingMinutes(a) > 0);
-  if (withWork.length === 0) return [];
-
-  const avail = availableMinutesUntilDayEnd();
-  const totalRemaining = withWork.reduce((s, a) => s + remainingMinutes(a), 0);
-  const allCanFinish = totalRemaining <= avail;
-
-  if (allCanFinish) return withWork;
-  return withWork.filter((a) => remainingMinutes(a) <= avail);
-}
-
-function pickRandomActivity() {
-  const pool = eligibleActivitiesForDraw();
-  if (pool.length === 0) return null;
-  const index = Math.floor(Math.random() * pool.length);
-  return pool[index];
-}
-
-function formatDuration(ms) {
-  const totalSec = Math.floor(ms / 1000);
-  const mm = String(Math.floor(totalSec / 60)).padStart(2, "0");
-  const ss = String(totalSec % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
-}
-
-function stopTimer() {
-  if (session.tickId) {
-    clearInterval(session.tickId);
-    session.tickId = null;
+function persistState({ syncFile = true } = {}) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    showToast("La sauvegarde locale a échoué. Pense à exporter tes données.");
+    console.warn(error);
   }
-  session.running = false;
-  session.startedAt = null;
-  session.elapsedMs = 0;
-  $("timerDisplay").textContent = "00:00";
-  $("btnStart").disabled = !drawnActivity;
-  $("btnValidate").disabled = true;
+  if (syncFile && linkedFileHandle) queueFileWrite();
 }
 
-function startTimer() {
-  if (!drawnActivity || session.running) return;
-  if (isLunchTime()) {
-    setDayMessage("Pause déjeuner : impossible de démarrer une session.");
-    return;
+function ensureCurrentDay(now = new Date()) {
+  const key = Logic.dateKey(now);
+  if (key === currentDay) return false;
+  currentDay = key;
+  if (
+    state.activeSession &&
+    Logic.dateKey(new Date(state.activeSession.startedAt)) !== currentDay
+  ) {
+    state.activeSession = null;
   }
-  if (isAfterDayEnd()) {
-    setDayMessage("La journée est terminée (heure de fin atteinte).");
-    return;
+  if (
+    state.activeDraw &&
+    Logic.dateKey(new Date(state.activeDraw.drawnAt)) !== currentDay
+  ) {
+    state.activeDraw = null;
   }
-
-  session.running = true;
-  session.startedAt = Date.now();
-  session.elapsedMs = 0;
-  $("btnStart").disabled = true;
-  $("btnValidate").disabled = false;
-  $("btnDraw").disabled = true;
-
-  session.tickId = setInterval(() => {
-    ensureToday();
-    session.elapsedMs = Date.now() - session.startedAt;
-    $("timerDisplay").textContent = formatDuration(session.elapsedMs);
-
-    if (isLunchTime() || isAfterDayEnd()) {
-      setDayMessage(
-        isLunchTime()
-          ? "Pause déjeuner en cours — validez la session si vous avez terminé."
-          : "Heure de fin de journée dépassée — validez la session."
-      );
-    }
-  }, 1000);
+  state.lastOptionalActivityId = null;
+  persistState();
+  uiMessage = "Nouvelle journée, nouveaux tirages : les compteurs repartent de zéro.";
+  return true;
 }
 
-function validateSession() {
-  if (!session.running || !drawnActivity) return;
+function activityById(id) {
+  return state.activities.find((activity) => activity.id === id) || null;
+}
 
-  const durationMin = Math.round(session.elapsedMs / 60000);
-  if (durationMin < settings.minSession) {
-    setDayMessage(
-      `Session trop courte : minimum ${settings.minSession} min (actuellement ~${durationMin} min).`
-    );
-    return;
-  }
-  if (durationMin > settings.maxSession) {
-    setDayMessage(
-      `Session trop longue : maximum ${settings.maxSession} min (actuellement ~${durationMin} min).`
-    );
-    return;
-  }
+function formatFriendly(minutes) {
+  const rounded = Math.max(0, Math.round(Number(minutes) || 0));
+  const hours = Math.floor(rounded / 60);
+  const rest = rounded % 60;
+  if (!hours) return `${rest} min`;
+  if (!rest) return `${hours} h`;
+  return `${hours} h ${String(rest).padStart(2, "0")} min`;
+}
 
-  const endedAt = new Date();
-  const startedAt = new Date(session.startedAt);
+function formatTimer(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  return hours
+    ? `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
+    : `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
 
-  drawnActivity.doneToday += durationMin;
-  sessionsToday.push({
-    date: todayKey,
-    name: drawnActivity.name,
-    durationMin,
-    startedAt: startedAt.toISOString(),
-    endedAt: endedAt.toISOString(),
-  });
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 
-  stopTimer();
-  drawnActivity = null;
-  $("drawResult").hidden = true;
-  $("btnDraw").disabled = false;
+function setMessage(message) {
+  uiMessage = message;
+  $("dayMessage").textContent = message;
+}
 
+function renderAll() {
+  ensureCurrentDay();
+  renderDayStatus();
+  renderDraw();
   renderActivities();
-  renderSessions();
-  setDayMessage(`Session enregistrée : ${durationMin} min sur « ${sessionsToday.at(-1).name} ».`);
-  persistSoon();
+  renderHistory();
+  renderActivityManager();
+  renderNotificationStatus();
+}
 
-  const next = pickRandomActivity();
-  if (next) {
-    drawnActivity = next;
-    $("drawnName").textContent = next.name;
-    $("drawResult").hidden = false;
-    $("btnStart").disabled = false;
-    setDayMessage(`Prochain tirage : « ${next.name} ». Démarrez quand vous êtes prêt.`);
-  } else {
-    setDayMessage("Plus d’activité tirée : quotas ou temps disponible insuffisant.");
+function renderDayStatus(now = new Date()) {
+  const available = Logic.availableMinutes(state.settings, now);
+  const paused = Logic.isPauseTime(state.settings, now);
+  const ended = available <= 0 && !paused;
+  $("dayCountdown").textContent = formatFriendly(available);
+  $("dayStateDot").className = `status-dot${paused ? " is-paused" : ended ? " is-ended" : ""}`;
+  $("dayState").textContent = paused
+    ? `Pause jusqu’à ${state.settings.pauseEnd}`
+    : ended
+      ? "Journée terminée"
+      : `Fin prévue à ${state.settings.dayEnd}`;
+}
+
+function currentDraw() {
+  if (state.activeSession) return state.activeSession;
+  return state.activeDraw;
+}
+
+function renderDraw() {
+  const draw = currentDraw();
+  const activity = draw ? activityById(draw.activityId) : null;
+  const running = Boolean(state.activeSession);
+
+  $("drawResult").hidden = !activity;
+  $("timerStage").hidden = !running;
+  $("btnDraw").disabled = running;
+  $("btnStart").disabled = !state.activeDraw || running;
+  $("btnValidate").disabled = !running;
+  $("btnDraw").hidden = Boolean(state.activeDraw) || running;
+  $("btnStart").hidden = !state.activeDraw || running;
+  $("btnValidate").hidden = !running;
+
+  if (activity) {
+    const optional = activity.category === Logic.CATEGORY_OPTIONAL;
+    $("drawnName").textContent = activity.name;
+    $("drawCategory").textContent = optional ? "Bonus facultatif" : "Mission obligatoire";
+    $("plannedDuration").textContent = formatFriendly(draw.plannedMinutes);
+    $("drawIcon").textContent = optional ? "◆" : "✦";
+    $("drawIcon").classList.toggle("optional", optional);
+    $("urgentBadge").hidden = !draw.urgent;
   }
+
+  if (!uiMessage) {
+    uiMessage = running
+      ? "Ta session est lancée. Tu décides du moment exact où elle se termine."
+      : activity
+        ? "Le sort a parlé. Démarre quand tu es prêt."
+        : "Lance la roue pour découvrir ta prochaine mission.";
+  }
+  $("dayMessage").textContent = uiMessage;
+}
+
+function activityCard(activity) {
+  const optional = activity.category === Logic.CATEGORY_OPTIONAL;
+  const actual = Logic.actualMinutesDone(activity, state.sessions, currentDay);
+  const progress = Logic.progressMinutes(activity, state.sessions, currentDay);
+  const target = optional ? activity.dailyCap : activity.targetMinutes;
+  const percentage = target ? Math.min(100, Math.round((progress / target) * 100)) : 0;
+  const primary = optional
+    ? `${formatFriendly(actual)} consacrées`
+    : `${formatFriendly(progress)} sur ${formatFriendly(activity.targetMinutes)}`;
+  const secondary = optional
+    ? activity.dailyCap
+      ? `${formatFriendly(Math.max(0, activity.dailyCap - actual))} disponibles`
+      : "Sans plafond quotidien"
+    : `${percentage} % complété`;
+
+  return `
+    <article class="activity-card ${optional ? "optional" : ""}">
+      <div class="activity-card-top">
+        <h3>${escapeHtml(activity.name)}</h3>
+        <button type="button" class="ban-button" data-ban="${escapeHtml(activity.id)}"
+          aria-label="Mettre ${escapeHtml(activity.name)} en réserve" title="Mettre en réserve">⌫</button>
+      </div>
+      ${target ? `<div class="progress-track" aria-label="${percentage} %"><div class="progress-fill" style="--progress:${percentage}%"></div></div>` : ""}
+      <div class="activity-stats">
+        <span>${primary}</span>
+        <span>${secondary}</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderActivities() {
+  const active = state.activities.filter((activity) => !activity.banned);
+  const required = active.filter(
+    (activity) => activity.category === Logic.CATEGORY_REQUIRED
+  );
+  const optional = active.filter(
+    (activity) => activity.category === Logic.CATEGORY_OPTIONAL
+  );
+  const banned = state.activities.filter((activity) => activity.banned);
+
+  $("requiredList").innerHTML = required.length
+    ? required.map(activityCard).join("")
+    : '<div class="empty-state">Aucune mission obligatoire active.</div>';
+  $("optionalList").innerHTML = optional.length
+    ? optional.map(activityCard).join("")
+    : '<div class="empty-state">Aucune activité facultative active.</div>';
+
+  const requiredTarget = required.reduce(
+    (sum, activity) => sum + Number(activity.targetMinutes),
+    0
+  );
+  const requiredDone = required.reduce(
+    (sum, activity) => sum + Logic.progressMinutes(activity, state.sessions, currentDay),
+    0
+  );
+  const optionalDone = optional.reduce(
+    (sum, activity) => sum + Logic.actualMinutesDone(activity, state.sessions, currentDay),
+    0
+  );
+  $("requiredSummary").textContent = requiredTarget
+    ? `${formatFriendly(requiredDone)} / ${formatFriendly(requiredTarget)}`
+    : "Libre";
+  $("optionalSummary").textContent = `${formatFriendly(optionalDone)} jouées`;
+  $("bannedCount").textContent = banned.length;
+  $("bannedList").innerHTML = banned.length
+    ? banned
+        .map(
+          (activity) => `
+            <span class="banned-item">${escapeHtml(activity.name)}
+              <button type="button" class="restore-button" data-restore="${escapeHtml(activity.id)}">Réactiver</button>
+            </span>`
+        )
+        .join("")
+    : '<span class="empty-state">La réserve est vide.</span>';
+}
+
+function renderHistory() {
+  const sessions = state.sessions
+    .filter((session) => session.date === currentDay)
+    .sort((a, b) => new Date(b.endedAt) - new Date(a.endedAt));
+  const total = sessions.reduce(
+    (sum, session) => sum + (Number(session.actualMinutes) || 0),
+    0
+  );
+  $("historyTotal").textContent = formatFriendly(total);
+  $("sessionLog").innerHTML = sessions.length
+    ? sessions
+        .map((session) => {
+          const time = new Date(session.startedAt).toLocaleTimeString("fr-FR", {
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+          return `
+            <li class="session-row">
+              <time>${time}</time>
+              <span><strong>${escapeHtml(session.activityName)}</strong>
+                <small>Prévu ${formatFriendly(session.plannedMinutes)}</small></span>
+              <span class="session-duration">${formatFriendly(session.actualMinutes)}</span>
+            </li>`;
+        })
+        .join("")
+    : '<li class="empty-state">Aucune partie aujourd’hui. La roue t’attend.</li>';
+}
+
+function renderActivityManager() {
+  $("activityManager").innerHTML = state.activities.length
+    ? state.activities
+        .map((activity, index) => {
+          const optional = activity.category === Logic.CATEGORY_OPTIONAL;
+          const duration = optional
+            ? activity.dailyCap
+              ? `Plafond ${formatFriendly(activity.dailyCap)}`
+              : "Sans plafond"
+            : `Objectif ${formatFriendly(activity.targetMinutes)}`;
+          return `
+            <div class="manager-row">
+              <div class="manager-name">
+                <strong>${escapeHtml(activity.name)}${activity.banned ? " · en réserve" : ""}</strong>
+                <small>${duration}</small>
+              </div>
+              <span class="type-badge ${optional ? "optional" : ""}">${optional ? "Facultative" : "Obligatoire"}</span>
+              <div class="manager-actions">
+                <button type="button" class="order-button" data-move-up="${escapeHtml(activity.id)}"
+                  aria-label="Monter" ${index === 0 ? "disabled" : ""}>↑</button>
+                <button type="button" class="order-button" data-move-down="${escapeHtml(activity.id)}"
+                  aria-label="Descendre" ${index === state.activities.length - 1 ? "disabled" : ""}>↓</button>
+                <button type="button" class="order-button" data-${activity.banned ? "restore" : "ban"}="${escapeHtml(activity.id)}"
+                  aria-label="${activity.banned ? "Réactiver" : "Mettre en réserve"}">${activity.banned ? "↺" : "⌫"}</button>
+              </div>
+            </div>`;
+        })
+        .join("")
+    : '<div class="empty-state">Ajoute ta première activité.</div>';
 }
 
 function requestDraw() {
-  ensureToday();
-  if (session.running) {
-    setDayMessage("Terminez la session en cours avant un nouveau tirage.");
+  ensureCurrentDay();
+  if (state.activeSession) {
+    showToast("Clôture d’abord la session en cours.");
     return;
   }
-  if (isLunchTime()) {
-    setDayMessage("Pause déjeuner : pas de nouvelle session.");
-    return;
-  }
-  if (isAfterDayEnd()) {
-    setDayMessage("Journée terminée.");
+  const result = Logic.drawActivity({
+    activities: state.activities,
+    sessions: state.sessions,
+    settings: state.settings,
+    lastOptionalActivityId: state.lastOptionalActivityId,
+    now: new Date(),
+  });
+  if (!result.ok) {
+    const messages = {
+      pause: `La roue se repose jusqu’à ${state.settings.pauseEnd}.`,
+      "day-ended": "La journée est terminée. Reviens demain pour une nouvelle partie.",
+      "nothing-eligible": "Toutes les activités actives sont complétées ou plafonnées.",
+      "no-valid-duration": "Aucune durée de session valide n’est disponible.",
+    };
+    state.activeDraw = null;
+    persistState();
+    setMessage(messages[result.reason] || "Aucun tirage possible pour le moment.");
+    renderAll();
     return;
   }
 
-  const picked = pickRandomActivity();
-  if (!picked) {
-    drawnActivity = null;
-    $("drawResult").hidden = true;
-    $("btnStart").disabled = true;
-    const avail = availableMinutesUntilDayEnd();
-    if (activities.every((a) => remainingMinutes(a) === 0)) {
-      setDayMessage("Tous les objectifs du jour sont atteints.");
-    } else {
-      setDayMessage(
-        `Aucune activité ne peut encore tenir son quota avec le temps restant (${avail} min ouvrées).`
+  state.activeDraw = {
+    activityId: result.activity.id,
+    category: result.category,
+    plannedMinutes: result.plannedMinutes,
+    urgent: result.urgent,
+    drawnAt: new Date().toISOString(),
+  };
+  persistState();
+  setMessage(
+    result.urgent
+      ? "Mode urgence : la première mission obligatoire passe devant tout le reste."
+      : result.category === Logic.CATEGORY_REQUIRED
+        ? "Une mission obligatoire a remporté le tirage pondéré."
+        : "Le hasard t’offre un bonus facultatif."
+  );
+  renderAll();
+}
+
+function startSession() {
+  if (!state.activeDraw || state.activeSession) return;
+  const now = new Date();
+  if (Logic.isPauseTime(state.settings, now) || Logic.availableMinutes(state.settings, now) <= 0) {
+    requestDraw();
+    return;
+  }
+  state.activeSession = {
+    ...state.activeDraw,
+    startedAt: now.toISOString(),
+    warningSent: false,
+    endSent: false,
+  };
+  state.activeDraw = null;
+  persistState();
+  requestNotificationPermission(false);
+  setMessage("C’est parti ! La durée réelle sera enregistrée quand tu clôtureras.");
+  renderAll();
+  tick();
+}
+
+function finishSession() {
+  const active = state.activeSession;
+  if (!active) return;
+  const activity = activityById(active.activityId);
+  if (!activity) {
+    state.activeSession = null;
+    persistState();
+    renderAll();
+    return;
+  }
+  const endedAt = new Date();
+  const elapsed = endedAt.getTime() - new Date(active.startedAt).getTime();
+  const actualMinutes = Math.max(1, Math.round(elapsed / 60000));
+  state.sessions.push({
+    id: makeId("session"),
+    date: Logic.dateKey(new Date(active.startedAt)),
+    activityId: activity.id,
+    activityName: activity.name,
+    category: activity.category,
+    plannedMinutes: active.plannedMinutes,
+    actualMinutes,
+    startedAt: active.startedAt,
+    endedAt: endedAt.toISOString(),
+  });
+  if (activity.category === Logic.CATEGORY_OPTIONAL) {
+    state.lastOptionalActivityId = activity.id;
+  }
+  state.activeSession = null;
+  persistState();
+  setMessage(
+    `${formatFriendly(actualMinutes)} enregistrées sur « ${activity.name} »` +
+      (actualMinutes > active.plannedMinutes ? " — beau dépassement !" : ".")
+  );
+  celebrate();
+  renderAll();
+}
+
+function tick() {
+  const changedDay = ensureCurrentDay();
+  renderDayStatus();
+  if (!state.activeSession) {
+    if (changedDay) renderAll();
+    return;
+  }
+
+  const elapsed = Math.max(
+    0,
+    Date.now() - new Date(state.activeSession.startedAt).getTime()
+  );
+  const target = state.activeSession.plannedMinutes * 60000;
+  const warningAt = Math.max(0, target - 60000);
+  $("timerDisplay").textContent = formatTimer(elapsed);
+  $("timerTarget").textContent = `sur ${formatFriendly(state.activeSession.plannedMinutes)}`;
+  $("timerMessage").textContent =
+    "Le chrono continue tant que tu ne clôtures pas la session.";
+  $("timerRing").style.setProperty(
+    "--timer-progress",
+    `${Math.min(100, (elapsed / target) * 100)}%`
+  );
+
+  if (!state.activeSession.warningSent && elapsed >= warningAt && elapsed < target) {
+    state.activeSession.warningSent = true;
+    persistState();
+    notifyUser("Plus qu’une minute", "Ta mission touche bientôt à sa fin.");
+  }
+  if (!state.activeSession.endSent && elapsed >= target) {
+    state.activeSession.endSent = true;
+    persistState();
+    notifyUser("Temps prévu écoulé", "Tu peux clôturer maintenant, ou continuer à ton rythme.");
+    $("timerMessage").textContent =
+      "Temps prévu dépassé : le chrono continue jusqu’à ta clôture.";
+  }
+}
+
+function banActivity(id) {
+  const activity = activityById(id);
+  if (!activity) return;
+  if (state.activeSession?.activityId === id) {
+    showToast("Cette activité est en cours : clôture-la avant de la mettre en réserve.");
+    return;
+  }
+  activity.banned = true;
+  if (state.activeDraw?.activityId === id) state.activeDraw = null;
+  persistState();
+  setMessage(`« ${activity.name} » est en réserve et ne participe plus aux tirages.`);
+  renderAll();
+}
+
+function restoreActivity(id) {
+  const activity = activityById(id);
+  if (!activity) return;
+  activity.banned = false;
+  persistState();
+  setMessage(`« ${activity.name} » est de retour dans le jeu.`);
+  renderAll();
+}
+
+function moveActivity(id, direction) {
+  const index = state.activities.findIndex((activity) => activity.id === id);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= state.activities.length) return;
+  [state.activities[index], state.activities[target]] = [
+    state.activities[target],
+    state.activities[index],
+  ];
+  persistState();
+  renderAll();
+}
+
+function showToast(message) {
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.textContent = message;
+  $("toastRegion").appendChild(toast);
+  window.setTimeout(() => toast.remove(), 4200);
+}
+
+function notifyUser(title, body) {
+  showToast(`${title} — ${body}`);
+  if ("Notification" in window && Notification.permission === "granted") {
+    try {
+      new Notification(title, { body, tag: `casino-${title}` });
+    } catch (error) {
+      console.warn("Notification indisponible.", error);
+    }
+  }
+}
+
+async function requestNotificationPermission(showFeedback = true) {
+  if (!("Notification" in window)) {
+    if (showFeedback) showToast("Ce navigateur ne prend pas en charge les notifications.");
+    return;
+  }
+  if (Notification.permission === "default") {
+    const permission = await Notification.requestPermission();
+    if (showFeedback) {
+      showToast(
+        permission === "granted"
+          ? "Notifications activées."
+          : "Notifications refusées : les alertes resteront visibles dans l’application."
       );
     }
-    return;
+  } else if (showFeedback) {
+    showToast(
+      Notification.permission === "granted"
+        ? "Les notifications sont déjà actives."
+        : "Les notifications sont bloquées dans les réglages du navigateur."
+    );
   }
-
-  drawnActivity = picked;
-  $("drawnName").textContent = picked.name;
-  $("drawResult").hidden = false;
-  $("btnStart").disabled = false;
-  const firstOfDay = sessionsToday.length === 0;
-  setDayMessage(
-    firstOfDay
-      ? `Première session : tirage uniforme parmi les activités encore réalisables (${picked.name}).`
-      : `Activité tirée : ${picked.name}.`
-  );
+  renderNotificationStatus();
 }
 
-function setDayMessage(msg) {
-  $("dayMessage").textContent = msg;
+function renderNotificationStatus() {
+  const supported = "Notification" in window;
+  const permission = supported ? Notification.permission : "unsupported";
+  const labels = {
+    granted: "Notifications actives : alerte une minute avant et à l’échéance.",
+    denied: "Notifications bloquées : les alertes internes restent actives.",
+    default: "Active-les pour être prévenu une minute avant la fin.",
+    unsupported: "Notifications système indisponibles : les alertes internes restent actives.",
+  };
+  $("notificationStatus").textContent = labels[permission];
+  $("btnNotifications").disabled = permission === "granted" || permission === "unsupported";
 }
 
-function readSettingsFromForm() {
-  settings.minSession = Number($("minSession").value) || DEFAULT_SETTINGS.minSession;
-  settings.maxSession = Number($("maxSession").value) || DEFAULT_SETTINGS.maxSession;
-  settings.lunchStart = $("lunchStart").value || DEFAULT_SETTINGS.lunchStart;
-  settings.lunchEnd = $("lunchEnd").value || DEFAULT_SETTINGS.lunchEnd;
-  settings.dayEnd = $("dayEnd").value || DEFAULT_SETTINGS.dayEnd;
-
-  if (settings.minSession > settings.maxSession) {
-    const t = settings.minSession;
-    settings.minSession = settings.maxSession;
-    settings.maxSession = t;
+function celebrate() {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const colors = ["#ffc84a", "#ff6577", "#2bcfa6", "#7448ed", "#4baaf7"];
+  for (let index = 0; index < 42; index += 1) {
+    const piece = document.createElement("i");
+    piece.className = "confetti-piece";
+    piece.style.left = `${Math.random() * 100}%`;
+    piece.style.setProperty("--piece-color", colors[index % colors.length]);
+    piece.style.setProperty("--drift", `${Math.random() * 180 - 90}px`);
+    piece.style.animationDelay = `${Math.random() * 0.35}s`;
+    $("confetti").appendChild(piece);
+    window.setTimeout(() => piece.remove(), 2400);
   }
-
-  $("hintMin").textContent = settings.minSession;
-  $("hintMax").textContent = settings.maxSession;
 }
 
-function writeSettingsToForm() {
-  $("minSession").value = settings.minSession;
-  $("maxSession").value = settings.maxSession;
-  $("lunchStart").value = settings.lunchStart;
-  $("lunchEnd").value = settings.lunchEnd;
-  $("dayEnd").value = settings.dayEnd;
-  $("hintMin").textContent = settings.minSession;
-  $("hintMax").textContent = settings.maxSession;
+function writeSettingsForm() {
+  $("minSession").value = state.settings.minSession;
+  $("maxSession").value = state.settings.maxSession;
+  $("pauseStart").value = state.settings.pauseStart;
+  $("pauseEnd").value = state.settings.pauseEnd;
+  $("dayEnd").value = state.settings.dayEnd;
+  $("maxSession").min = state.settings.minSession * 2;
+}
+
+function updateActivityDurationField() {
+  const optional = $("newActivityCategory").value === Logic.CATEGORY_OPTIONAL;
+  $("activityDurationLabel").firstChild.textContent = optional
+    ? "Plafond quotidien "
+    : "Objectif quotidien ";
+  $("newActivityDuration").required = !optional;
+  $("newActivityDuration").placeholder = optional ? "Optionnel" : "";
+  $("activityDurationHint").textContent = optional
+    ? "Laisse vide pour une activité sans plafond."
+    : "Durée à atteindre exactement chaque jour.";
+}
+
+function switchView(name) {
+  const settings = name === "settings";
+  $("gameView").hidden = settings;
+  $("settingsView").hidden = !settings;
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    const active = button.dataset.view === name;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  if (settings) writeSettingsForm();
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 function escapeCsv(value) {
-  const s = String(value ?? "");
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-function serializeCsv() {
-  ensureToday();
-  const lines = [CSV_HEADER];
-  for (const a of activities) {
-    lines.push(
-      ["activity", a.name, a.dailyTarget, a.doneToday, ""].map(escapeCsv).join(",")
-    );
-  }
-  const settingRows = [
-    ["setting", "min_session", settings.minSession, "", ""],
-    ["setting", "max_session", settings.maxSession, "", ""],
-    ["setting", "lunch_start", 0, 0, settings.lunchStart],
-    ["setting", "lunch_end", 0, 0, settings.lunchEnd],
-    ["setting", "day_end", 0, 0, settings.dayEnd],
-    ["meta", "date", 0, 0, todayKey],
-  ];
-  for (const row of settingRows) {
-    lines.push(row.map(escapeCsv).join(","));
-  }
-  for (const s of sessionsToday) {
-    lines.push(
-      ["session", s.name, s.durationMin, 0, `${s.date}|${s.startedAt}|${s.endedAt}`]
-        .map(escapeCsv)
-        .join(",")
-    );
-  }
-  return lines.join("\n") + "\n";
-}
-
-function parseCsv(text) {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("#"));
-
-  const parsedActivities = [];
-  const parsedSessions = [];
-  const newSettings = { ...DEFAULT_SETTINGS };
-  let fileDate = todayKey;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (i === 0 && line.toLowerCase().startsWith("type,")) continue;
-
-    const cols = splitCsvLine(line);
-    const type = cols[0];
-    const name = cols[1] ?? "";
-
-    if (type === "activity") {
-      parsedActivities.push({
-        name,
-        dailyTarget: Number(cols[2]) || 0,
-        doneToday: Number(cols[3]) || 0,
-      });
-    } else if (type === "setting") {
-      if (name === "min_session") newSettings.minSession = Number(cols[2]) || 15;
-      if (name === "max_session") newSettings.maxSession = Number(cols[2]) || 40;
-      if (name === "lunch_start") newSettings.lunchStart = cols[4] || DEFAULT_SETTINGS.lunchStart;
-      if (name === "lunch_end") newSettings.lunchEnd = cols[4] || DEFAULT_SETTINGS.lunchEnd;
-      if (name === "day_end") newSettings.dayEnd = cols[4] || DEFAULT_SETTINGS.dayEnd;
-    } else if (type === "meta" && name === "date") {
-      fileDate = cols[4] || fileDate;
-    } else if (type === "session") {
-      const extra = cols[4] || "";
-      const [date, startedAt, endedAt] = extra.split("|");
-      parsedSessions.push({
-        date: date || todayKey,
-        name,
-        durationMin: Number(cols[2]) || 0,
-        startedAt: startedAt || "",
-        endedAt: endedAt || "",
-      });
-    }
-  }
-
-  if (parsedActivities.length > 0) activities = parsedActivities;
-  settings = newSettings;
-
-  if (fileDate === todayKey) {
-    sessionsToday = parsedSessions.filter((s) => s.date === todayKey);
-    activities.forEach((a) => {
-      if (parsedSessions.length && fileDate === todayKey) {
-        const logged = sessionsToday
-          .filter((s) => s.name === a.name)
-          .reduce((sum, s) => sum + s.durationMin, 0);
-        if (logged > 0) a.doneToday = logged;
-      }
-    });
-  } else {
-    sessionsToday = [];
-    activities.forEach((a) => {
-      a.doneToday = 0;
-    });
-  }
-
-  writeSettingsToForm();
-  renderActivities();
-  renderSessions();
+  const text = String(value ?? "");
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 function splitCsvLine(line) {
-  const result = [];
-  let cur = "";
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"' && line[i + 1] === '"') {
-        cur += '"';
-        i++;
-      } else if (ch === '"') inQuotes = false;
-      else cur += ch;
-    } else if (ch === '"') inQuotes = true;
-    else if (ch === ",") {
-      result.push(cur);
-      cur = "";
-    } else cur += ch;
-  }
-  result.push(cur);
-  return result;
-}
-
-async function persistSoon() {
-  if (canSaveToHandle && csvFileHandle) {
-    try {
-      const writable = await csvFileHandle.createWritable();
-      await writable.write(serializeCsv());
-      await writable.close();
-      setFileStatus(`Fichier lié : ${csvFileHandle.name}`);
-    } catch (err) {
-      console.warn("Échec enregistrement fichier", err);
-      setFileStatus("Erreur d’écriture sur le fichier lié.");
+  const values = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quoted && char === '"' && line[index + 1] === '"') {
+      current += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      values.push(current);
+      current = "";
+    } else {
+      current += char;
     }
   }
+  values.push(current);
+  return values;
+}
+
+const CSV_COLUMNS = [
+  "type", "id", "name", "category", "target", "dailyCap", "banned", "date",
+  "planned", "actual", "startedAt", "endedAt", "key", "value",
+];
+
+function serializeCsv() {
+  const rows = [CSV_COLUMNS];
+  for (const activity of state.activities) {
+    rows.push([
+      "activity", activity.id, activity.name, activity.category,
+      activity.targetMinutes ?? "", activity.dailyCap ?? "", activity.banned ? "1" : "0",
+      "", "", "", "", "", "", "",
+    ]);
+  }
+  for (const [key, value] of Object.entries(state.settings)) {
+    rows.push(["setting", "", "", "", "", "", "", "", "", "", "", "", key, value]);
+  }
+  for (const session of state.sessions) {
+    rows.push([
+      "session", session.id, session.activityName, session.category, "", "", "",
+      session.date, session.plannedMinutes, session.actualMinutes,
+      session.startedAt, session.endedAt, session.activityId, "",
+    ]);
+  }
+  rows.push(["meta", "", "", "", "", "", "", currentDay, "", "", "", "", "version", STATE_VERSION]);
+  return `${rows.map((row) => row.map(escapeCsv).join(",")).join("\n")}\n`;
+}
+
+function parseCsv(text) {
+  const lines = String(text)
+    .split(/\r?\n/)
+    .filter((line) => line.trim());
+  if (!lines.length) throw new Error("Le fichier est vide.");
+  const header = splitCsvLine(lines[0]);
+  if (header.join(",").toLowerCase() === "type,name,num1,num2,text") {
+    return parseLegacyCsv(lines);
+  }
+  const indexes = Object.fromEntries(header.map((column, index) => [column, index]));
+  if (indexes.type == null || indexes.id == null) throw new Error("Format CSV non reconnu.");
+  const imported = defaultState();
+  imported.activities = [];
+  imported.sessions = [];
+
+  const value = (columns, key) => columns[indexes[key]] ?? "";
+  for (const line of lines.slice(1)) {
+    const columns = splitCsvLine(line);
+    const type = value(columns, "type");
+    if (type === "activity") {
+      const category =
+        value(columns, "category") === Logic.CATEGORY_OPTIONAL
+          ? Logic.CATEGORY_OPTIONAL
+          : Logic.CATEGORY_REQUIRED;
+      imported.activities.push({
+        id: value(columns, "id") || makeId(value(columns, "name")),
+        name: value(columns, "name") || "Activité",
+        category,
+        targetMinutes:
+          category === Logic.CATEGORY_REQUIRED
+            ? Math.max(1, Number(value(columns, "target")) || 1)
+            : null,
+        dailyCap:
+          category === Logic.CATEGORY_OPTIONAL && value(columns, "dailyCap") !== ""
+            ? Math.max(1, Number(value(columns, "dailyCap")) || 1)
+            : null,
+        banned: value(columns, "banned") === "1",
+      });
+    } else if (type === "setting") {
+      const key = value(columns, "key");
+      const raw = value(columns, "value");
+      if (key in imported.settings) {
+        imported.settings[key] = key.includes("Session") ? Number(raw) : raw;
+      }
+    } else if (type === "session") {
+      imported.sessions.push({
+        id: value(columns, "id") || makeId("session"),
+        date: value(columns, "date"),
+        activityId: value(columns, "key"),
+        activityName: value(columns, "name"),
+        category: value(columns, "category"),
+        plannedMinutes: Number(value(columns, "planned")) || 0,
+        actualMinutes: Number(value(columns, "actual")) || 0,
+        startedAt: value(columns, "startedAt"),
+        endedAt: value(columns, "endedAt"),
+      });
+    }
+  }
+  if (!imported.activities.length) throw new Error("Le CSV ne contient aucune activité.");
+  return normalizeState(imported);
+}
+
+function parseLegacyCsv(lines) {
+  const imported = defaultState();
+  imported.activities = [];
+  imported.sessions = [];
+  const legacyProgress = new Map();
+  const idsByName = new Map();
+  let fileDate = currentDay;
+
+  for (const line of lines.slice(1)) {
+    const columns = splitCsvLine(line);
+    const [type, name, num1, num2, text] = columns;
+    if (type === "activity") {
+      const id = makeId(name);
+      idsByName.set(name, id);
+      imported.activities.push({
+        id,
+        name,
+        category: Logic.CATEGORY_REQUIRED,
+        targetMinutes: Math.max(1, Number(num1) || 1),
+        dailyCap: null,
+        banned: false,
+      });
+      legacyProgress.set(id, Number(num2) || 0);
+    } else if (type === "setting") {
+      if (name === "min_session") imported.settings.minSession = Number(num1) || 15;
+      if (name === "max_session") imported.settings.maxSession = Number(num1) || 40;
+      if (name === "lunch_start") imported.settings.pauseStart = text || "12:30";
+      if (name === "lunch_end") imported.settings.pauseEnd = text || "13:30";
+      if (name === "day_end") imported.settings.dayEnd = text || "17:00";
+    } else if (type === "meta" && name === "date") {
+      fileDate = text || currentDay;
+    } else if (type === "session") {
+      const [date, startedAt, endedAt] = String(text || "").split("|");
+      imported.sessions.push({
+        id: makeId("session"),
+        date: date || fileDate,
+        activityId: idsByName.get(name) || "",
+        activityName: name,
+        category: Logic.CATEGORY_REQUIRED,
+        plannedMinutes: Number(num1) || 0,
+        actualMinutes: Number(num1) || 0,
+        startedAt: startedAt || `${fileDate}T00:00:00`,
+        endedAt: endedAt || `${fileDate}T00:00:00`,
+      });
+    }
+  }
+  for (const activity of imported.activities) {
+    const logged = Logic.actualMinutesDone(activity, imported.sessions, fileDate);
+    const missing = Math.max(0, (legacyProgress.get(activity.id) || 0) - logged);
+    if (missing > 0 && fileDate === currentDay) {
+      imported.sessions.push({
+        id: makeId("migration"),
+        date: fileDate,
+        activityId: activity.id,
+        activityName: activity.name,
+        category: activity.category,
+        plannedMinutes: missing,
+        actualMinutes: missing,
+        startedAt: `${fileDate}T00:00:00`,
+        endedAt: `${fileDate}T00:00:00`,
+      });
+    }
+  }
+  if (!imported.activities.length) throw new Error("Le CSV ne contient aucune activité.");
+  return normalizeState(imported);
 }
 
 function downloadCsv() {
   const blob = new Blob([serializeCsv()], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "casino-du-pomodoro.csv";
-  a.click();
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `casino-du-pomodoro-${currentDay}.csv`;
+  anchor.click();
   URL.revokeObjectURL(url);
-  setFileStatus("Export téléchargé : casino-du-pomodoro.csv");
+  $("fileStatus").textContent = "Export téléchargé. La sauvegarde locale reste active.";
+}
+
+function queueFileWrite() {
+  if (!linkedFileHandle) return;
+  fileWriteQueue = fileWriteQueue
+    .then(async () => {
+      const writable = await linkedFileHandle.createWritable();
+      await writable.write(serializeCsv());
+      await writable.close();
+      $("fileStatus").textContent = `Synchronisé avec ${linkedFileHandle.name}.`;
+    })
+    .catch((error) => {
+      console.warn("Synchronisation CSV impossible.", error);
+      $("fileStatus").textContent =
+        "Sauvegarde locale active, mais la synchronisation CSV a échoué.";
+    });
 }
 
 async function linkCsvFile() {
   if (!window.showOpenFilePicker) {
-    setFileStatus(
-      "API fichiers non supportée : utilisez Importer / Exporter (Chrome ou Edge recommandé pour lier un fichier)."
-    );
+    showToast("Liaison directe indisponible : importe ou exporte le CSV.");
     $("fileImport").click();
     return;
   }
-
   try {
     const [handle] = await window.showOpenFilePicker({
-      types: [
-        {
-          description: "CSV Casino du Pomodoro",
-          accept: { "text/csv": [".csv"] },
-        },
-      ],
+      types: [{ description: "Données Casino du Pomodoro", accept: { "text/csv": [".csv"] } }],
       multiple: false,
     });
-    csvFileHandle = handle;
-    canSaveToHandle = true;
     const file = await handle.getFile();
-    parseCsv(await file.text());
+    if (file.size > 0) {
+      state = parseCsv(await file.text());
+      persistState({ syncFile: false });
+    }
+    linkedFileHandle = handle;
     $("btnSaveFile").disabled = false;
-    setFileStatus(`Fichier lié : ${handle.name} (enregistrement auto après chaque action)`);
-    await persistSoon();
-  } catch (err) {
-    if (err.name !== "AbortError") console.warn(err);
+    queueFileWrite();
+    writeSettingsForm();
+    setMessage("CSV importé et lié. La sauvegarde locale reste la source principale.");
+    renderAll();
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      showToast(`Impossible de lier ce fichier : ${error.message}`);
+    }
   }
 }
 
-async function saveCsvFile() {
-  if (canSaveToHandle && csvFileHandle) {
-    await persistSoon();
-    return;
-  }
-  downloadCsv();
-}
-
-function importCsvFromFile(file) {
-  const reader = new FileReader();
-  reader.onload = () => {
-    parseCsv(reader.result);
-    setFileStatus(`Importé : ${file.name}`);
-    persistSoon();
-  };
-  reader.readAsText(file);
-}
-
-function setFileStatus(msg) {
-  $("fileStatus").textContent = msg;
-}
-
-function renderActivities() {
-  const ul = $("activityList");
-  ul.innerHTML = "";
-  activities.forEach((a, index) => {
-    const li = document.createElement("li");
-    li.className = "activity-item";
-    const rem = remainingMinutes(a);
-    const pct = a.dailyTarget
-      ? Math.min(100, Math.round((a.doneToday / a.dailyTarget) * 100))
-      : 0;
-    li.innerHTML = `
-      <div>
-        <strong>${escapeHtml(a.name)}</strong>
-        <p class="progress-label">Objectif ${a.dailyTarget} min/jour · reste ${rem} min</p>
-      </div>
-      <div class="progress-wrap">
-        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
-        <span class="progress-label">${a.doneToday} / ${a.dailyTarget} min</span>
-      </div>
-      <button type="button" class="btn-icon" data-remove="${index}" aria-label="Supprimer">Retirer</button>
-    `;
-    ul.appendChild(li);
-  });
-
-  ul.querySelectorAll("[data-remove]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const i = Number(btn.dataset.remove);
-      if (Number.isFinite(i)) {
-        activities.splice(i, 1);
-        renderActivities();
-        persistSoon();
-      }
-    });
-  });
-}
-
-function escapeHtml(str) {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function renderSessions() {
-  const ul = $("sessionLog");
-  ul.innerHTML = "";
-  if (sessionsToday.length === 0) {
-    ul.innerHTML = "<li>Aucune session aujourd’hui.</li>";
-    return;
-  }
-  for (const s of sessionsToday) {
-    const li = document.createElement("li");
-    const time = s.startedAt ? new Date(s.startedAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "—";
-    li.textContent = `${time} — ${s.name} : ${s.durationMin} min`;
-    ul.appendChild(li);
+async function importCsvFile(file) {
+  try {
+    state = parseCsv(await file.text());
+    persistState();
+    writeSettingsForm();
+    setMessage(`Données importées depuis « ${file.name} ».`);
+    $("fileStatus").textContent = `Import réussi : ${file.name}.`;
+    renderAll();
+  } catch (error) {
+    showToast(`Import impossible : ${error.message}`);
   }
 }
 
 function initEvents() {
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.addEventListener("click", () => switchView(button.dataset.view));
+  });
   $("btnDraw").addEventListener("click", requestDraw);
-  $("btnStart").addEventListener("click", startTimer);
-  $("btnValidate").addEventListener("click", validateSession);
+  $("btnStart").addEventListener("click", startSession);
+  $("btnValidate").addEventListener("click", finishSession);
+  $("btnNotifications").addEventListener("click", () => requestNotificationPermission(true));
   $("btnLinkFile").addEventListener("click", linkCsvFile);
-  $("btnSaveFile").addEventListener("click", saveCsvFile);
+  $("btnSaveFile").addEventListener("click", queueFileWrite);
   $("btnExport").addEventListener("click", downloadCsv);
-  $("fileImport").addEventListener("change", (e) => {
-    const file = e.target.files?.[0];
-    if (file) importCsvFromFile(file);
-    e.target.value = "";
+  $("fileImport").addEventListener("change", (event) => {
+    const file = event.target.files?.[0];
+    if (file) importCsvFile(file);
+    event.target.value = "";
   });
 
-  ["minSession", "maxSession", "lunchStart", "lunchEnd", "dayEnd"].forEach((id) => {
-    $(id).addEventListener("change", () => {
-      readSettingsFromForm();
-      persistSoon();
-    });
+  $("scheduleForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const candidate = {
+      minSession: Number($("minSession").value),
+      maxSession: Number($("maxSession").value),
+      pauseStart: $("pauseStart").value,
+      pauseEnd: $("pauseEnd").value,
+      dayEnd: $("dayEnd").value,
+    };
+    const errors = Logic.validateSettings(candidate);
+    $("settingsError").textContent = errors.join(" ");
+    if (errors.length) return;
+    state.settings = candidate;
+    persistState();
+    writeSettingsForm();
+    showToast("Règles de la journée enregistrées.");
+    renderAll();
   });
 
-  $("activityForm").addEventListener("submit", (e) => {
-    e.preventDefault();
+  $("minSession").addEventListener("input", () => {
+    $("maxSession").min = Math.max(2, Number($("minSession").value) * 2);
+  });
+  $("newActivityCategory").addEventListener("change", updateActivityDurationField);
+  $("activityForm").addEventListener("submit", (event) => {
+    event.preventDefault();
     const name = $("newActivityName").value.trim();
-    const minutes = Number($("newActivityMinutes").value);
-    if (!name || !minutes) return;
-    activities.push({ name, dailyTarget: minutes, doneToday: 0 });
-    $("newActivityName").value = "";
-    $("newActivityMinutes").value = "";
-    renderActivities();
-    persistSoon();
+    const category = $("newActivityCategory").value;
+    const rawDuration = $("newActivityDuration").value;
+    const duration = rawDuration === "" ? null : Math.max(1, Number(rawDuration) || 1);
+    if (!name || (category === Logic.CATEGORY_REQUIRED && !duration)) return;
+    state.activities.push({
+      id: makeId(name),
+      name,
+      category,
+      targetMinutes: category === Logic.CATEGORY_REQUIRED ? duration : null,
+      dailyCap: category === Logic.CATEGORY_OPTIONAL ? duration : null,
+      banned: false,
+    });
+    event.target.reset();
+    updateActivityDurationField();
+    persistState();
+    showToast(`« ${name} » rejoint le jeu.`);
+    renderAll();
   });
 
-  setInterval(() => {
-    ensureToday();
-    if (!session.running && !isLunchTime() && !isAfterDayEnd()) {
-      const avail = availableMinutesUntilDayEnd();
-      if (avail > 0 && !$("dayMessage").textContent.includes("Session enregistrée")) {
-        /* léger rafraîchissement implicite via ensureToday */
-      }
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (!button) return;
+    if (button.dataset.ban) banActivity(button.dataset.ban);
+    if (button.dataset.restore) restoreActivity(button.dataset.restore);
+    if (button.dataset.moveUp) moveActivity(button.dataset.moveUp, -1);
+    if (button.dataset.moveDown) moveActivity(button.dataset.moveDown, 1);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      tick();
+      renderAll();
     }
-  }, 60_000);
+  });
 }
 
 function init() {
-  writeSettingsToForm();
-  renderActivities();
-  renderSessions();
-  setDayMessage("Prêt. Liez un CSV ou utilisez les activités par défaut, puis tirez une activité.");
+  ensureCurrentDay();
+  writeSettingsForm();
+  updateActivityDurationField();
   initEvents();
+  renderAll();
+  tick();
+  window.setInterval(tick, 1000);
 }
 
 init();
