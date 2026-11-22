@@ -17,6 +17,16 @@
     return (Number.isFinite(hours) ? hours : 0) * 60 + (Number.isFinite(minutes) ? minutes : 0);
   }
 
+  function pauseClock(value) {
+    const text = String(value ?? "").trim();
+    if (!text) return null;
+    return parseClock(text);
+  }
+
+  function hasPauseSchedule(settings) {
+    return pauseClock(settings.pauseStart) != null && pauseClock(settings.pauseEnd) != null;
+  }
+
   function atMinuteOfDay(date, minuteOfDay) {
     const result = new Date(date);
     result.setHours(Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0, 0);
@@ -24,21 +34,30 @@
   }
 
   function isPauseTime(settings, now = new Date()) {
+    if (!hasPauseSchedule(settings)) return false;
     const current = now.getHours() * 60 + now.getMinutes();
-    const start = parseClock(settings.pauseStart);
-    const finish = parseClock(settings.pauseEnd);
-    return start < finish && current >= start && current < finish;
+    const start = pauseClock(settings.pauseStart);
+    const finish = pauseClock(settings.pauseEnd);
+    if (start == null || finish == null || start >= finish) return false;
+    return current >= start && current < finish;
   }
 
   function availableMinutes(settings, now = new Date()) {
     const dayEnd = atMinuteOfDay(now, parseClock(settings.dayEnd));
     if (now >= dayEnd) return 0;
 
-    const pauseStart = atMinuteOfDay(now, parseClock(settings.pauseStart));
-    const pauseEnd = atMinuteOfDay(now, parseClock(settings.pauseEnd));
-    const overlapStart = Math.max(now.getTime(), pauseStart.getTime());
-    const overlapEnd = Math.min(dayEnd.getTime(), pauseEnd.getTime());
-    const pauseMs = Math.max(0, overlapEnd - overlapStart);
+    let pauseMs = 0;
+    if (hasPauseSchedule(settings)) {
+      const startMin = pauseClock(settings.pauseStart);
+      const endMin = pauseClock(settings.pauseEnd);
+      if (startMin != null && endMin != null && startMin < endMin) {
+        const pauseStart = atMinuteOfDay(now, startMin);
+        const pauseEnd = atMinuteOfDay(now, endMin);
+        const overlapStart = Math.max(now.getTime(), pauseStart.getTime());
+        const overlapEnd = Math.min(dayEnd.getTime(), pauseEnd.getTime());
+        pauseMs = Math.max(0, overlapEnd - overlapStart);
+      }
+    }
     return Math.max(0, Math.floor((dayEnd.getTime() - now.getTime() - pauseMs) / 60000));
   }
 
@@ -137,19 +156,15 @@
     return values[Math.min(values.length - 1, Math.floor(random() * values.length))];
   }
 
-  function drawActivity({
+  function eligibleDrawPools(
     activities,
     sessions,
     settings,
     lastOptionalActivityId = null,
-    now = new Date(),
-    random = Math.random,
-  }) {
+    now = new Date()
+  ) {
     const day = dateKey(now);
     const available = availableMinutes(settings, now);
-    if (isPauseTime(settings, now)) return { ok: false, reason: "pause", available };
-    if (available <= 0) return { ok: false, reason: "day-ended", available };
-
     const active = activities.filter((activity) => !activity.banned);
     const required = active.filter(
       (activity) =>
@@ -161,20 +176,133 @@
         activity.category === CATEGORY_OPTIONAL &&
         optionalCapRemaining(activity, sessions, day) > 0
     );
+    if (optional.length > 1 && lastOptionalActivityId) {
+      const withoutLast = optional.filter(
+        (candidate) => candidate.id !== lastOptionalActivityId
+      );
+      if (withoutLast.length) optional = withoutLast;
+    }
     const totalRequired = required.reduce(
       (total, activity) => total + requiredRemaining(activity, sessions, day),
       0
     );
+    const urgent = Boolean(required.length && totalRequired > available);
+    return { day, available, active, required, optional, totalRequired, urgent };
+  }
 
+  function activityWheelSegments({
+    activities,
+    sessions,
+    settings,
+    lastOptionalActivityId = null,
+    now = new Date(),
+  }) {
+    const { day, available, active, required, optional, totalRequired, urgent } =
+      eligibleDrawPools(activities, sessions, settings, lastOptionalActivityId, now);
+    if (!required.length && !optional.length) return [];
+
+    if (urgent) {
+      return required.map((activity, index) => ({
+        activity,
+        category: activity.category,
+        probability: index === 0 ? 1 : 0,
+      })).filter((segment) => segment.probability > 0);
+    }
+
+    let probabilityRequired = 0;
+    if (!required.length) probabilityRequired = 0;
+    else if (!optional.length) probabilityRequired = 1;
+    else probabilityRequired = Math.min(1, totalRequired / available);
+    const probabilityOptional = 1 - probabilityRequired;
+
+    const segments = [];
+
+    if (required.length) {
+      const weighted = required.map((activity) => ({
+        activity,
+        weight: requiredRemaining(activity, sessions, day),
+      }));
+      const weightTotal = weighted.reduce((sum, entry) => sum + entry.weight, 0);
+      for (const entry of weighted) {
+        const share = weightTotal > 0 ? entry.weight / weightTotal : 0;
+        segments.push({
+          activity: entry.activity,
+          category: CATEGORY_REQUIRED,
+          probability: probabilityRequired * share,
+        });
+      }
+    }
+
+    if (optional.length) {
+      const optionalSpent = active
+        .filter((candidate) => candidate.category === CATEGORY_OPTIONAL)
+        .reduce(
+          (total, candidate) => total + actualMinutesDone(candidate, sessions, day),
+          0
+        );
+      const optionalDayPool = optionalSpent + Math.max(0, available - totalRequired);
+      const weighted = optional.map((activity) => ({
+        activity,
+        weight: Math.max(1, optionalDayPool - actualMinutesDone(activity, sessions, day)),
+      }));
+      const weightTotal = weighted.reduce((sum, entry) => sum + entry.weight, 0);
+      for (const entry of weighted) {
+        const share = weightTotal > 0 ? entry.weight / weightTotal : 0;
+        segments.push({
+          activity: entry.activity,
+          category: CATEGORY_OPTIONAL,
+          probability: probabilityOptional * share,
+        });
+      }
+    }
+
+    const total = segments.reduce((sum, segment) => sum + segment.probability, 0);
+    if (total <= 0) return segments;
+    return segments.map((segment) => ({
+      ...segment,
+      probability: segment.probability / total,
+    }));
+  }
+
+  function durationWheelSegments(activity, remaining, available, settings) {
+    const values = validPlannedDurations(activity, remaining, available, settings);
+    if (!values.length) return [];
+    const probability = 1 / values.length;
+    return values.map((minutes) => ({ minutes, probability }));
+  }
+
+  function durationWheelDisplaySegments(settings) {
+    const minimum = Math.max(1, Math.round(Number(settings.minSession) || 1));
+    const maximum = Math.max(minimum, Math.round(Number(settings.maxSession) || minimum));
+    const values = integerRange(minimum, maximum);
+    const probability = 1 / values.length;
+    return values.map((minutes) => ({ minutes, probability }));
+  }
+
+  function drawActivity({
+    activities,
+    sessions,
+    settings,
+    lastOptionalActivityId = null,
+    now = new Date(),
+    random = Math.random,
+  }) {
+    if (isPauseTime(settings, now)) {
+      const available = availableMinutes(settings, now);
+      return { ok: false, reason: "pause", available };
+    }
+
+    const { day, available, active, required, optional, totalRequired, urgent } =
+      eligibleDrawPools(activities, sessions, settings, lastOptionalActivityId, now);
+
+    if (available <= 0) return { ok: false, reason: "day-ended", available };
     if (!required.length && !optional.length) {
       return { ok: false, reason: "nothing-eligible", available, totalRequired };
     }
 
     let category;
-    let urgent = false;
-    if (required.length && totalRequired > available) {
+    if (urgent) {
       category = CATEGORY_REQUIRED;
-      urgent = true;
     } else if (!required.length) {
       category = CATEGORY_OPTIONAL;
     } else if (!optional.length) {
@@ -253,11 +381,15 @@
     if (!Number.isInteger(maximum) || maximum < minimum * 2) {
       errors.push("La durée maximale doit être au moins égale à deux fois la durée minimale.");
     }
-    if (parseClock(settings.pauseStart) >= parseClock(settings.pauseEnd)) {
-      errors.push("La fin de pause doit être postérieure à son début.");
-    }
-    if (parseClock(settings.dayEnd) <= parseClock(settings.pauseEnd)) {
-      errors.push("La fin de journée doit être postérieure à la fin de pause.");
+    if (hasPauseSchedule(settings)) {
+      const start = pauseClock(settings.pauseStart);
+      const finish = pauseClock(settings.pauseEnd);
+      if (start != null && finish != null && start >= finish) {
+        errors.push("La fin de pause doit être postérieure à son début.");
+      }
+      if (finish != null && parseClock(settings.dayEnd) <= finish) {
+        errors.push("La fin de journée doit être postérieure à la fin de pause.");
+      }
     }
     return errors;
   }
@@ -265,10 +397,13 @@
   const api = {
     CATEGORY_REQUIRED,
     CATEGORY_OPTIONAL,
+    activityWheelSegments,
     actualMinutesDone,
     availableMinutes,
     dateKey,
     drawActivity,
+    durationWheelDisplaySegments,
+    durationWheelSegments,
     isPauseTime,
     optionalCapRemaining,
     parseClock,

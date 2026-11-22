@@ -69,6 +69,7 @@ Les tests couvrent le temps ouvrable, les pondérations, le mode urgence, l’an
 index.html          interface Jeu et Paramètres
 styles.css          thème responsive et animations
 logic.js            moteur temporel et probabiliste
+wheel.js            double roulette visuelle et sons
 app.js              interface, chrono et stockage local
 tests/logic.test.js tests unitaires sans dépendance
 ```

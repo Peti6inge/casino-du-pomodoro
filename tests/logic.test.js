@@ -156,6 +156,56 @@ test("pénalise les facultatives déjà pratiquées", () => {
   assert.equal(result.activity.id, "B");
 });
 
+test("n'applique aucune pause lorsque les horaires sont vides", () => {
+  const noPause = { ...settings, pauseStart: "", pauseEnd: "" };
+  assert.equal(Logic.isPauseTime(noPause, new Date(2026, 10, 19, 12, 45)), false);
+  assert.equal(Logic.availableMinutes(noPause, new Date(2026, 10, 19, 13, 0)), 240);
+  assert.equal(Logic.validateSettings(noPause).length, 0);
+});
+
+test("ignore une pause incomplète sans bloquer l'enregistrement", () => {
+  const partial = { ...settings, pauseStart: "12:30", pauseEnd: "" };
+  assert.equal(Logic.isPauseTime(partial, new Date(2026, 10, 19, 12, 45)), false);
+  assert.equal(Logic.availableMinutes(partial, new Date(2026, 10, 19, 13, 0)), 240);
+  assert.equal(Logic.validateSettings(partial).length, 0);
+});
+
+test("distribue les angles selon les probabilités réelles du tirage", () => {
+  const activities = [
+    required("a", 60),
+    required("b", 60),
+    optional("c", null),
+  ];
+  const sessions = [
+    {
+      date: "2026-11-19",
+      activityId: "a",
+      activityName: "a",
+      actualMinutes: 30,
+      category: "required",
+    },
+  ];
+  const segments = Logic.activityWheelSegments({
+    activities,
+    sessions,
+    settings,
+    now: new Date(2026, 10, 19, 10, 0),
+  });
+  const byId = Object.fromEntries(segments.map((segment) => [segment.activity.id, segment.probability]));
+  assert.ok(Math.abs(byId.a - 1 / 12) < 0.001);
+  assert.ok(Math.abs(byId.b - 1 / 6) < 0.001);
+  assert.ok(Math.abs(byId.c - 0.75) < 0.001);
+  assert.ok(Math.abs(segments.reduce((sum, segment) => sum + segment.probability, 0) - 1) < 0.0001);
+});
+
+test("répartit les durées de façon uniforme sur la roue extérieure", () => {
+  const activity = required("a", 60);
+  const segments = Logic.durationWheelSegments(activity, 60, 120, settings);
+  const share = 1 / segments.length;
+  assert.ok(segments.length > 1);
+  assert.ok(segments.every((segment) => Math.abs(segment.probability - share) < 0.0001));
+});
+
 test("rejette un maximum inférieur au double du minimum", () => {
   const errors = Logic.validateSettings({
     ...settings,

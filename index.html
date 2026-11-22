@@ -43,21 +43,28 @@
           </div>
         </div>
 
-        <section class="draw-stage" aria-labelledby="drawTitle">
-          <div class="sprinkle sprinkle-a" aria-hidden="true"></div>
-          <div class="sprinkle sprinkle-b" aria-hidden="true"></div>
-          <div class="draw-copy">
-            <span class="eyebrow light">La roue décide</span>
-            <h1 id="drawTitle">Quelle sera ta prochaine mission ?</h1>
-            <p id="dayMessage">Ajoute tes activités, puis laisse le hasard organiser ta journée.</p>
+        <section class="draw-stage" aria-label="Tirage et session">
+          <div id="wheelArena" class="wheel-arena" aria-hidden="false">
+            <svg id="wheelOuter" class="wheel-svg wheel-svg-outer" viewBox="0 0 240 240" role="img" aria-label="Roue des durées">
+              <g data-wheel-rotor></g>
+              <g data-wheel-labels></g>
+            </svg>
+            <svg id="wheelInner" class="wheel-svg wheel-svg-inner" viewBox="0 0 240 240" role="img" aria-label="Roue des activités">
+              <g data-wheel-rotor></g>
+              <g data-wheel-labels></g>
+            </svg>
+            <span class="wheel-pointer wheel-pointer-outer" aria-hidden="true"></span>
+            <div class="wheel-hub" aria-hidden="true">
+              <span class="wheel-pointer wheel-pointer-inner" aria-hidden="true"></span>
+            </div>
           </div>
 
           <div id="drawResult" class="draw-result" hidden>
             <div id="drawIcon" class="activity-orb" aria-hidden="true">✦</div>
-            <div>
-              <span id="drawCategory" class="result-category">Mission</span>
+            <div class="draw-result-copy">
               <h2 id="drawnName">—</h2>
-              <p>Session proposée : <strong id="plannedDuration">—</strong></p>
+              <p>Durée prévue : <strong id="plannedDuration">—</strong></p>
+              <p>Progression : <strong id="drawProgress">—</strong></p>
             </div>
             <span id="urgentBadge" class="urgent-badge" hidden>Priorité absolue</span>
           </div>
@@ -85,35 +92,19 @@
           </div>
         </section>
 
-        <section class="activity-section" aria-labelledby="requiredTitle">
-          <div class="section-heading">
-            <div>
-              <span class="section-kicker coral">À accomplir</span>
-              <h2 id="requiredTitle">Missions obligatoires</h2>
-            </div>
-            <span id="requiredSummary" class="summary-chip">—</span>
-          </div>
+        <section class="activity-zone activity-zone--required" aria-label="Missions obligatoires">
+          <header class="activity-zone-bar">
+            <span id="requiredSummary" class="summary-chip summary-chip--required">—</span>
+          </header>
           <div id="requiredList" class="activity-grid"></div>
         </section>
 
-        <section class="activity-section" aria-labelledby="optionalTitle">
-          <div class="section-heading">
-            <div>
-              <span class="section-kicker mint">Bonus surprise</span>
-              <h2 id="optionalTitle">Activités facultatives</h2>
-            </div>
-            <span id="optionalSummary" class="summary-chip">—</span>
-          </div>
+        <section class="activity-zone activity-zone--optional" aria-label="Activités facultatives">
+          <header class="activity-zone-bar">
+            <span id="optionalSummary" class="summary-chip summary-chip--optional">—</span>
+          </header>
           <div id="optionalList" class="activity-grid"></div>
         </section>
-
-        <details id="bannedPanel" class="banned-panel">
-          <summary>
-            <span>Activités en réserve</span>
-            <span id="bannedCount" class="count-bubble">0</span>
-          </summary>
-          <div id="bannedList" class="banned-list"></div>
-        </details>
 
         <section class="history-card" aria-labelledby="historyTitle">
           <div class="section-heading compact">
@@ -128,65 +119,41 @@
         <header class="settings-header">
           <span class="eyebrow">Coulisses du jeu</span>
           <h1>Prépare ta journée</h1>
-          <p>Ces règles pilotent les probabilités et le temps réellement disponible.</p>
+          <p>Chaque onglet est un jeu indépendant (ex. Semaine, Weekend). Clique pour l’activer, modifie son nom directement.</p>
         </header>
 
-        <div class="settings-layout">
-          <form id="scheduleForm" class="settings-card">
-            <div class="card-title">
-              <span class="card-icon purple" aria-hidden="true">◷</span>
-              <div>
-                <h2>Rythme de la journée</h2>
-                <p>Le maximum doit valoir au moins deux fois le minimum.</p>
-              </div>
-            </div>
-            <div class="form-grid">
-              <label>Session minimale
-                <span class="input-with-unit"><input type="number" id="minSession" min="1" required /><span>min</span></span>
-              </label>
-              <label>Session maximale
-                <span class="input-with-unit"><input type="number" id="maxSession" min="2" required /><span>min</span></span>
-              </label>
-              <label>Début de pause
-                <input type="time" id="pauseStart" required />
-              </label>
-              <label>Fin de pause
-                <input type="time" id="pauseEnd" required />
-              </label>
-              <label>Fin de journée
-                <input type="time" id="dayEnd" required />
-              </label>
-            </div>
-            <p id="settingsError" class="form-error" role="alert"></p>
-            <button type="submit" class="soft-button purple">Enregistrer les règles</button>
-          </form>
+        <div id="profileTabs" class="profile-tabs" aria-label="Jeux de réglages"></div>
 
-          <section class="settings-card">
-            <div class="card-title">
-              <span class="card-icon coral" aria-hidden="true">＋</span>
-              <div>
-                <h2>Nouvelle activité</h2>
-                <p>Obligatoire avec objectif, ou facultative avec plafond optionnel.</p>
-              </div>
+        <form id="scheduleForm" class="settings-card wide">
+          <div class="card-title">
+            <span class="card-icon purple" aria-hidden="true">◷</span>
+            <div>
+              <h2>Rythme de la journée</h2>
+              <p>Le maximum doit valoir au moins deux fois le minimum. Laisse la pause vide pour faire sans.</p>
             </div>
-            <form id="activityForm" class="activity-form">
-              <label>Nom
-                <input type="text" id="newActivityName" maxlength="80" placeholder="Ex. Lecture" required />
-              </label>
-              <label>Type
-                <select id="newActivityCategory">
-                  <option value="required">Obligatoire</option>
-                  <option value="optional">Facultative</option>
-                </select>
-              </label>
-              <label id="activityDurationLabel">Objectif quotidien
-                <span class="input-with-unit"><input type="number" id="newActivityDuration" min="1" required /><span>min</span></span>
-                <small id="activityDurationHint">Durée à atteindre exactement chaque jour.</small>
-              </label>
-              <button type="submit" class="soft-button coral">Ajouter au jeu</button>
-            </form>
-          </section>
-        </div>
+          </div>
+          <div class="form-grid form-grid-schedule">
+            <label>Session minimale
+              <span class="input-with-unit"><input type="number" id="minSession" min="1" required /><span>min</span></span>
+            </label>
+            <label>Session maximale
+              <span class="input-with-unit"><input type="number" id="maxSession" min="2" required /><span>min</span></span>
+            </label>
+            <label>Début de pause (facultatif)
+              <input type="time" id="pauseStart" />
+            </label>
+            <label>Fin de pause (facultatif)
+              <input type="time" id="pauseEnd" />
+            </label>
+            <label>Fin de journée
+              <input type="time" id="dayEnd" required />
+            </label>
+          </div>
+          <p id="settingsError" class="form-error" role="alert"></p>
+          <div class="form-actions">
+            <button type="submit" class="soft-button purple">Enregistrer les règles</button>
+          </div>
+        </form>
 
         <section class="settings-card wide">
           <div class="card-title">
@@ -199,7 +166,7 @@
           <div id="activityManager" class="activity-manager"></div>
         </section>
 
-        <section class="settings-card">
+        <section id="notificationsCard" class="settings-card">
           <div class="card-title">
             <span class="card-icon blue" aria-hidden="true">♬</span>
             <div>
@@ -209,6 +176,24 @@
           </div>
           <button type="button" id="btnNotifications" class="soft-button blue">Activer les notifications</button>
         </section>
+
+        <section class="settings-card wide">
+          <div class="card-title">
+            <span class="card-icon yellow" aria-hidden="true">⇄</span>
+            <div>
+              <h2>Synchronisation</h2>
+              <p id="fileStatus">Export et import CSV de toute l’application : tous les onglets, activités, rythme et historique.</p>
+            </div>
+          </div>
+          <div class="button-cluster">
+            <button type="button" id="btnExport" class="soft-button yellow">Exporter</button>
+            <label class="soft-button neutral file-label">Importer
+              <input type="file" id="fileImport" accept=".csv,text/csv" hidden />
+            </label>
+            <button type="button" id="btnLinkFile" class="soft-button neutral">Lier un CSV</button>
+            <button type="button" id="btnSaveFile" class="soft-button neutral" disabled>Synchroniser</button>
+          </div>
+        </section>
       </section>
     </main>
   </div>
@@ -217,6 +202,7 @@
   <div id="confetti" class="confetti" aria-hidden="true"></div>
 
   <script src="logic.js"></script>
+  <script src="wheel.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

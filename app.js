@@ -2,7 +2,7 @@
 
 const Logic = window.CasinoLogic;
 const STORAGE_KEY = "casino-du-pomodoro:v2";
-const STATE_VERSION = 2;
+const STATE_VERSION = 3;
 const DEFAULT_SETTINGS = {
   minSession: 15,
   maxSession: 40,
@@ -52,6 +52,11 @@ const clone = (value) => JSON.parse(JSON.stringify(value));
 let state = loadState();
 let currentDay = "";
 let uiMessage = "";
+let wheelSpinning = false;
+let linkedFileHandle = null;
+let fileWriteQueue = Promise.resolve();
+
+const Wheel = window.CasinoWheel;
 
 function makeId(name = "activité") {
   const slug = name
@@ -67,11 +72,54 @@ function makeId(name = "activité") {
   return `${slug || "activite"}-${suffix}`;
 }
 
+function normalizeSettings(settings) {
+  return { ...DEFAULT_SETTINGS, ...(settings || {}) };
+}
+
+function normalizeActivities(activities, fallback = DEFAULT_ACTIVITIES) {
+  if (!Array.isArray(activities)) return clone(fallback);
+  return activities.map((activity) => ({
+    id: activity.id || makeId(activity.name),
+    name: String(activity.name || "Activité"),
+    category:
+      activity.category === Logic.CATEGORY_OPTIONAL
+        ? Logic.CATEGORY_OPTIONAL
+        : Logic.CATEGORY_REQUIRED,
+    targetMinutes:
+      activity.category === Logic.CATEGORY_OPTIONAL
+        ? null
+        : Math.max(1, Number(activity.targetMinutes) || 1),
+    dailyCap:
+      activity.category === Logic.CATEGORY_OPTIONAL && activity.dailyCap != null
+        ? Math.max(1, Number(activity.dailyCap) || 1)
+        : null,
+    banned: Boolean(activity.banned),
+    emoji: normalizeEmoji(activity.emoji),
+  }));
+}
+
+function createProfile({
+  name = "Jeu 1",
+  settings = DEFAULT_SETTINGS,
+  activities = DEFAULT_ACTIVITIES,
+  id = makeId("jeu"),
+} = {}) {
+  return {
+    id,
+    name: String(name || "Jeu").trim() || "Jeu",
+    settings: normalizeSettings(settings),
+    activities: normalizeActivities(activities),
+  };
+}
+
 function defaultState() {
+  const profile = createProfile({ name: "Jeu 1" });
   return {
     version: STATE_VERSION,
-    settings: { ...DEFAULT_SETTINGS },
-    activities: clone(DEFAULT_ACTIVITIES),
+    profiles: [profile],
+    activeProfileId: profile.id,
+    settings: profile.settings,
+    activities: profile.activities,
     sessions: [],
     activeDraw: null,
     activeSession: null,
@@ -82,28 +130,39 @@ function defaultState() {
 function normalizeState(candidate) {
   const fallback = defaultState();
   if (!candidate || typeof candidate !== "object") return fallback;
+
+  let profiles;
+  if (Array.isArray(candidate.profiles) && candidate.profiles.length) {
+    profiles = candidate.profiles.map((profile, index) =>
+      createProfile({
+        id: profile.id || makeId(`jeu-${index + 1}`),
+        name: profile.name || `Jeu ${index + 1}`,
+        settings: profile.settings,
+        activities: profile.activities,
+      })
+    );
+  } else {
+    profiles = [
+      createProfile({
+        name: "Jeu 1",
+        settings: candidate.settings,
+        activities: candidate.activities,
+      }),
+    ];
+  }
+
+  const activeProfileId =
+    profiles.some((profile) => profile.id === candidate.activeProfileId)
+      ? candidate.activeProfileId
+      : profiles[0].id;
+  const active = profiles.find((profile) => profile.id === activeProfileId) || profiles[0];
+
   return {
     version: STATE_VERSION,
-    settings: { ...DEFAULT_SETTINGS, ...(candidate.settings || {}) },
-    activities: Array.isArray(candidate.activities)
-      ? candidate.activities.map((activity) => ({
-          id: activity.id || makeId(activity.name),
-          name: String(activity.name || "Activité"),
-          category:
-            activity.category === Logic.CATEGORY_OPTIONAL
-              ? Logic.CATEGORY_OPTIONAL
-              : Logic.CATEGORY_REQUIRED,
-          targetMinutes:
-            activity.category === Logic.CATEGORY_OPTIONAL
-              ? null
-              : Math.max(1, Number(activity.targetMinutes) || 1),
-          dailyCap:
-            activity.category === Logic.CATEGORY_OPTIONAL && activity.dailyCap != null
-              ? Math.max(1, Number(activity.dailyCap) || 1)
-              : null,
-          banned: Boolean(activity.banned),
-        }))
-      : fallback.activities,
+    profiles,
+    activeProfileId: active.id,
+    settings: active.settings,
+    activities: active.activities,
     sessions: Array.isArray(candidate.sessions)
       ? candidate.sessions.filter((session) => session && session.date)
       : [],
@@ -111,6 +170,26 @@ function normalizeState(candidate) {
     activeSession: candidate.activeSession || null,
     lastOptionalActivityId: candidate.lastOptionalActivityId || null,
   };
+}
+
+function getActiveProfile() {
+  return (
+    state.profiles.find((profile) => profile.id === state.activeProfileId) ||
+    state.profiles[0]
+  );
+}
+
+function bindActiveProfile() {
+  const profile = getActiveProfile();
+  state.activeProfileId = profile.id;
+  state.settings = profile.settings;
+  state.activities = profile.activities;
+}
+
+function flushActiveProfile() {
+  const profile = getActiveProfile();
+  profile.settings = state.settings;
+  profile.activities = state.activities;
 }
 
 function loadState() {
@@ -123,13 +202,107 @@ function loadState() {
   }
 }
 
-function persistState() {
+function persistState({ syncFile = true } = {}) {
+  flushActiveProfile();
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (error) {
     showToast("Impossible d’enregistrer localement. Vérifie l’espace de stockage du navigateur.");
     console.warn(error);
   }
+  if (syncFile && linkedFileHandle) queueFileWrite();
+}
+
+function switchProfile(id) {
+  if (id === state.activeProfileId) return;
+  const profile = state.profiles.find((entry) => entry.id === id);
+  if (!profile) return;
+  flushActiveProfile();
+  state.activeProfileId = profile.id;
+  bindActiveProfile();
+  state.activeDraw = null;
+  state.activeSession = null;
+  state.lastOptionalActivityId = null;
+  persistState();
+  writeSettingsForm();
+  renderAll();
+}
+
+function addProfile() {
+  flushActiveProfile();
+  const index = state.profiles.length + 1;
+  const profile = createProfile({
+    name: `Jeu ${index}`,
+    settings: DEFAULT_SETTINGS,
+    activities: [],
+  });
+  state.profiles.push(profile);
+  state.activeProfileId = profile.id;
+  bindActiveProfile();
+  state.activeDraw = null;
+  state.activeSession = null;
+  state.lastOptionalActivityId = null;
+  persistState();
+  writeSettingsForm();
+  renderAll();
+}
+
+function deleteProfile(id) {
+  if (state.profiles.length <= 1) return;
+  const index = state.profiles.findIndex((profile) => profile.id === id);
+  if (index <= 0) {
+    showToast("Le premier jeu de réglages ne peut pas être supprimé.");
+    return;
+  }
+  if (!confirm(`Supprimer « ${state.profiles[index].name} » ?`)) return;
+  const wasActive = state.activeProfileId === id;
+  state.profiles.splice(index, 1);
+  if (wasActive) {
+    state.activeProfileId = state.profiles[0].id;
+    bindActiveProfile();
+    state.activeDraw = null;
+    state.activeSession = null;
+    state.lastOptionalActivityId = null;
+    writeSettingsForm();
+  }
+  persistState();
+  renderAll();
+}
+
+function renameProfile(id, rawName) {
+  const profile = state.profiles.find((entry) => entry.id === id);
+  if (!profile) return;
+  const name = String(rawName || "").trim();
+  if (!name) {
+    const field = document.querySelector(`[data-rename-profile="${CSS.escape(id)}"]`);
+    if (field) field.value = profile.name;
+    return;
+  }
+  if (profile.name === name) return;
+  profile.name = name;
+  persistState();
+}
+
+function renderProfileTabs() {
+  const root = $("profileTabs");
+  if (!root) return;
+  root.innerHTML = `
+    ${state.profiles
+      .map((profile, index) => {
+        const active = profile.id === state.activeProfileId;
+        return `
+          <div class="profile-tab${active ? " is-active" : ""}" data-profile-id="${escapeHtml(profile.id)}">
+            <input type="text" class="profile-tab-name" data-select-profile="${escapeHtml(profile.id)}" data-rename-profile="${escapeHtml(profile.id)}" value="${escapeHtml(profile.name)}" maxlength="40" aria-label="Nom du jeu ${escapeHtml(profile.name)}" title="Clique pour sélectionner, modifie pour renommer (ex. Semaine, Weekend)" />
+            ${
+              index === 0
+                ? ""
+                : `<button type="button" class="profile-tab-close" data-delete-profile="${escapeHtml(profile.id)}" aria-label="Supprimer ${escapeHtml(profile.name)}">×</button>`
+            }
+          </div>`;
+      })
+      .join("")}
+    <button type="button" id="btnAddProfile" class="profile-tab-add" aria-label="Nouveau jeu de réglages">＋</button>
+  `;
 }
 
 function ensureCurrentDay(now = new Date()) {
@@ -186,6 +359,22 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function normalizeEmoji(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, "")
+    .slice(0, 8);
+}
+
+function activityEmojiPrefix(activity) {
+  const emoji = normalizeEmoji(activity?.emoji);
+  return emoji ? `${emoji} ` : "";
+}
+
+function activityTitleHtml(activity) {
+  return `${escapeHtml(activityEmojiPrefix(activity))}${escapeHtml(activity.name)}`;
+}
+
 function activityToggleMarkup(activity) {
   const enabled = !activity.banned;
   return `
@@ -209,7 +398,6 @@ function deleteButtonMarkup(id, name) {
 
 function setMessage(message) {
   uiMessage = message;
-  $("dayMessage").textContent = message;
 }
 
 function renderAll() {
@@ -219,6 +407,7 @@ function renderAll() {
   renderActivities();
   renderHistory();
   renderActivityManager();
+  renderProfileTabs();
   renderNotificationStatus();
 }
 
@@ -240,38 +429,61 @@ function currentDraw() {
   return state.activeDraw;
 }
 
+function wheelDrawParams(now = new Date()) {
+  return {
+    activities: state.activities,
+    sessions: state.sessions,
+    settings: state.settings,
+    lastOptionalActivityId: state.lastOptionalActivityId,
+    now,
+  };
+}
+
+function refreshWheelFromState() {
+  if (!Wheel || state.activeSession || wheelSpinning || state.activeDraw) return;
+  Wheel.paint({
+    activitySegments: Logic.activityWheelSegments(wheelDrawParams()),
+    durationSegments: Logic.durationWheelDisplaySegments(state.settings),
+    preserveRotation: false,
+  });
+}
+
 function renderDraw() {
   const draw = currentDraw();
   const activity = draw ? activityById(draw.activityId) : null;
   const running = Boolean(state.activeSession);
+  const hasChoice = Boolean(state.activeDraw || running);
 
-  $("drawResult").hidden = !activity;
+  $("wheelArena").hidden = running;
+  $("drawResult").hidden = !hasChoice;
   $("timerStage").hidden = !running;
-  $("btnDraw").disabled = running;
-  $("btnStart").disabled = !state.activeDraw || running;
+  $("btnDraw").disabled = running || wheelSpinning;
+  $("btnStart").disabled = !state.activeDraw || running || wheelSpinning;
   $("btnValidate").disabled = !running;
   $("btnDraw").hidden = Boolean(state.activeDraw) || running;
   $("btnStart").hidden = !state.activeDraw || running;
   $("btnValidate").hidden = !running;
 
+  refreshWheelFromState();
+
   if (activity) {
     const optional = activity.category === Logic.CATEGORY_OPTIONAL;
-    $("drawnName").textContent = activity.name;
-    $("drawCategory").textContent = optional ? "Bonus facultatif" : "Mission obligatoire";
+    const progress = Logic.progressMinutes(activity, state.sessions, currentDay);
+    const target = optional ? activity.dailyCap : activity.targetMinutes;
+    $("drawnName").textContent = `${activityEmojiPrefix(activity)}${activity.name}`;
     $("plannedDuration").textContent = formatFriendly(draw.plannedMinutes);
+    if (target) {
+      const percentage = Math.min(100, Math.round((progress / target) * 100));
+      $("drawProgress").textContent = `${percentage} % · ${formatFriendly(progress)} / ${formatFriendly(target)}`;
+    } else {
+      $("drawProgress").textContent = `${formatFriendly(
+        Logic.actualMinutesDone(activity, state.sessions, currentDay)
+      )} aujourd’hui`;
+    }
     $("drawIcon").textContent = optional ? "◆" : "✦";
     $("drawIcon").classList.toggle("optional", optional);
     $("urgentBadge").hidden = !draw.urgent;
   }
-
-  if (!uiMessage) {
-    uiMessage = running
-      ? "Ta session est lancée. Tu décides du moment exact où elle se termine."
-      : activity
-        ? "Le sort a parlé. Démarre quand tu es prêt."
-        : "Lance la roue pour découvrir ta prochaine mission.";
-  }
-  $("dayMessage").textContent = uiMessage;
 }
 
 function activityCard(activity) {
@@ -289,13 +501,14 @@ function activityCard(activity) {
       : "Sans plafond quotidien"
     : `${percentage} % complété`;
 
+  const reserved = activity.banned;
+  const fillable = Boolean(target);
   return `
-    <article class="activity-card ${optional ? "optional" : ""}">
+    <article class="activity-card ${optional ? "optional" : ""}${fillable ? " has-fill" : ""}${reserved ? " is-reserved" : ""}"${fillable ? ` style="--fill:${percentage}%" aria-label="${percentage} %"` : ""}>
       <div class="activity-card-top">
-        <h3>${escapeHtml(activity.name)}</h3>
+        <h3>${activityTitleHtml(activity)}</h3>
         ${activityToggleMarkup(activity)}
       </div>
-      ${target ? `<div class="progress-track" aria-label="${percentage} %"><div class="progress-fill" style="--progress:${percentage}%"></div></div>` : ""}
       <div class="activity-stats">
         <span>${primary}</span>
         <span>${secondary}</span>
@@ -306,20 +519,19 @@ function activityCard(activity) {
 
 function renderActivities() {
   const active = state.activities.filter((activity) => !activity.banned);
-  const required = active.filter(
+  const required = state.activities.filter(
     (activity) => activity.category === Logic.CATEGORY_REQUIRED
   );
-  const optional = active.filter(
+  const optional = state.activities.filter(
     (activity) => activity.category === Logic.CATEGORY_OPTIONAL
   );
-  const banned = state.activities.filter((activity) => activity.banned);
 
   $("requiredList").innerHTML = required.length
     ? required.map(activityCard).join("")
-    : '<div class="empty-state">Aucune mission obligatoire active.</div>';
+    : '<div class="empty-state">Aucune mission obligatoire.</div>';
   $("optionalList").innerHTML = optional.length
     ? optional.map(activityCard).join("")
-    : '<div class="empty-state">Aucune activité facultative active.</div>';
+    : '<div class="empty-state">Aucune activité facultative.</div>';
 
   const requiredTarget = required.reduce(
     (sum, activity) => sum + Number(activity.targetMinutes),
@@ -337,18 +549,6 @@ function renderActivities() {
     ? `${formatFriendly(requiredDone)} / ${formatFriendly(requiredTarget)}`
     : "Libre";
   $("optionalSummary").textContent = `${formatFriendly(optionalDone)} jouées`;
-  $("bannedCount").textContent = banned.length;
-  $("bannedList").innerHTML = banned.length
-    ? banned
-        .map(
-          (activity) => `
-            <span class="banned-item">${escapeHtml(activity.name)}
-              ${activityToggleMarkup(activity)}
-              ${deleteButtonMarkup(activity.id, activity.name)}
-            </span>`
-        )
-        .join("")
-    : '<span class="empty-state">La réserve est vide.</span>';
 }
 
 function renderHistory() {
@@ -380,22 +580,34 @@ function renderHistory() {
 }
 
 function renderActivityManager() {
-  $("activityManager").innerHTML = state.activities.length
+  const rows = state.activities.length
     ? state.activities
         .map((activity, index) => {
           const optional = activity.category === Logic.CATEGORY_OPTIONAL;
-          const duration = optional
-            ? activity.dailyCap
-              ? `Plafond ${formatFriendly(activity.dailyCap)}`
-              : "Sans plafond"
-            : `Objectif ${formatFriendly(activity.targetMinutes)}`;
+          const durationValue = optional
+            ? activity.dailyCap ?? ""
+            : activity.targetMinutes ?? "";
           return `
             <div class="manager-row">
-              <div class="manager-name">
-                <strong>${escapeHtml(activity.name)}${activity.banned ? " · en réserve" : ""}</strong>
-                <small>${duration}</small>
-              </div>
-              <span class="type-badge ${optional ? "optional" : ""}">${optional ? "Facultative" : "Obligatoire"}</span>
+              <label class="manager-field manager-emoji">Emoji
+                <input type="text" class="emoji-input" data-emoji-activity="${escapeHtml(activity.id)}" maxlength="8" value="${escapeHtml(normalizeEmoji(activity.emoji))}" placeholder="" aria-label="Emoji pour ${escapeHtml(activity.name)}" />
+              </label>
+              <label class="manager-field manager-name">Nom
+                <input type="text" data-name-activity="${escapeHtml(activity.id)}" maxlength="80" value="${escapeHtml(activity.name)}" required />
+              </label>
+              <label class="manager-field manager-type">Type
+                <select data-category-activity="${escapeHtml(activity.id)}" aria-label="Type de ${escapeHtml(activity.name)}">
+                  <option value="required"${optional ? "" : " selected"}>Obligatoire</option>
+                  <option value="optional"${optional ? " selected" : ""}>Facultative</option>
+                </select>
+              </label>
+              <label class="manager-field manager-duration">
+                ${optional ? "Plafond" : "Objectif"}
+                <span class="input-with-unit">
+                  <input type="number" min="1" data-duration-activity="${escapeHtml(activity.id)}" value="${escapeHtml(durationValue)}" ${optional ? '' : "required"} aria-label="${optional ? "Plafond" : "Objectif"} de ${escapeHtml(activity.name)}" />
+                  <span>min</span>
+                </span>
+              </label>
               <div class="manager-actions">
                 <button type="button" class="order-button" data-move-up="${escapeHtml(activity.id)}"
                   aria-label="Monter" ${index === 0 ? "disabled" : ""}>↑</button>
@@ -407,22 +619,47 @@ function renderActivityManager() {
             </div>`;
         })
         .join("")
-    : '<div class="empty-state">Ajoute ta première activité.</div>';
+    : '<div class="empty-state">Aucune activité dans ce jeu. Ajoutes-en une.</div>';
+
+  $("activityManager").innerHTML = `
+    ${rows}
+    <button type="button" id="btnAddActivity" class="add-activity-button" aria-label="Ajouter une activité">＋</button>
+  `;
 }
 
-function requestDraw() {
+function addActivity() {
+  const activity = {
+    id: makeId("activite"),
+    name: "Nouvelle activité",
+    emoji: "",
+    category: Logic.CATEGORY_REQUIRED,
+    targetMinutes: Math.max(1, Number(state.settings.minSession) || 15),
+    dailyCap: null,
+    banned: false,
+  };
+  state.activities.push(activity);
+  persistState();
+  renderAll();
+  const nameInput = document.querySelector(
+    `[data-name-activity="${CSS.escape(activity.id)}"]`
+  );
+  if (nameInput) {
+    nameInput.focus();
+    nameInput.select();
+  }
+}
+
+async function requestDraw() {
   ensureCurrentDay();
   if (state.activeSession) {
     showToast("Clôture d’abord la session en cours.");
     return;
   }
-  const result = Logic.drawActivity({
-    activities: state.activities,
-    sessions: state.sessions,
-    settings: state.settings,
-    lastOptionalActivityId: state.lastOptionalActivityId,
-    now: new Date(),
-  });
+  if (wheelSpinning) return;
+
+  const now = new Date();
+  const wheelParams = wheelDrawParams(now);
+  const result = Logic.drawActivity(wheelParams);
   if (!result.ok) {
     const messages = {
       pause: `La roue se repose jusqu’à ${state.settings.pauseEnd}.`,
@@ -432,11 +669,36 @@ function requestDraw() {
     };
     state.activeDraw = null;
     persistState();
-    setMessage(messages[result.reason] || "Aucun tirage possible pour le moment.");
+    showToast(messages[result.reason] || "Aucun tirage possible pour le moment.");
     renderAll();
     return;
   }
 
+  const remaining =
+    result.category === Logic.CATEGORY_REQUIRED
+      ? Logic.requiredRemaining(result.activity, state.sessions, Logic.dateKey(now))
+      : Logic.optionalCapRemaining(result.activity, state.sessions, Logic.dateKey(now));
+  const activitySegments = Logic.activityWheelSegments(wheelParams);
+  const durationSegments = Logic.durationWheelSegments(
+    result.activity,
+    remaining,
+    result.available,
+    state.settings
+  );
+
+  wheelSpinning = true;
+  renderDraw();
+
+  if (Wheel) {
+    await Wheel.spin({
+      activitySegments,
+      durationSegments,
+      targetActivityId: result.activity.id,
+      targetMinutes: result.plannedMinutes,
+    });
+  }
+
+  wheelSpinning = false;
   state.activeDraw = {
     activityId: result.activity.id,
     category: result.category,
@@ -445,13 +707,6 @@ function requestDraw() {
     drawnAt: new Date().toISOString(),
   };
   persistState();
-  setMessage(
-    result.urgent
-      ? "Mode urgence : la première mission obligatoire passe devant tout le reste."
-      : result.category === Logic.CATEGORY_REQUIRED
-        ? "Une mission obligatoire a remporté le tirage pondéré."
-        : "Le hasard t’offre un bonus facultatif."
-  );
   renderAll();
 }
 
@@ -575,6 +830,68 @@ function restoreActivity(id) {
   return true;
 }
 
+function commitActivity(activity) {
+  persistState();
+  renderAll();
+}
+
+function setActivityEmoji(id, rawEmoji) {
+  const activity = activityById(id);
+  if (!activity) return;
+  activity.emoji = normalizeEmoji(rawEmoji);
+  commitActivity(activity);
+}
+
+function setActivityName(id, rawName) {
+  const activity = activityById(id);
+  if (!activity) return;
+  const name = String(rawName || "").trim();
+  if (!name) {
+    renderAll();
+    return;
+  }
+  activity.name = name;
+  commitActivity(activity);
+}
+
+function setActivityCategory(id, category) {
+  const activity = activityById(id);
+  if (!activity) return;
+  const next =
+    category === Logic.CATEGORY_OPTIONAL
+      ? Logic.CATEGORY_OPTIONAL
+      : Logic.CATEGORY_REQUIRED;
+  if (activity.category === next) return;
+  const currentMinutes = activity.targetMinutes ?? activity.dailyCap;
+  if (next === Logic.CATEGORY_REQUIRED) {
+    activity.category = next;
+    activity.targetMinutes = Math.max(1, Number(currentMinutes) || state.settings.minSession || 1);
+    activity.dailyCap = null;
+  } else {
+    activity.category = next;
+    activity.dailyCap = currentMinutes == null ? null : Math.max(1, Number(currentMinutes) || 1);
+    activity.targetMinutes = null;
+  }
+  commitActivity(activity);
+}
+
+function setActivityDuration(id, rawDuration) {
+  const activity = activityById(id);
+  if (!activity) return;
+  const text = String(rawDuration ?? "").trim();
+  if (activity.category === Logic.CATEGORY_OPTIONAL) {
+    activity.dailyCap = text === "" ? null : Math.max(1, Number(text) || 1);
+  } else {
+    const minutes = Math.max(1, Number(text) || 0);
+    if (!minutes) {
+      renderAll();
+      return;
+    }
+    activity.targetMinutes = minutes;
+  }
+  commitActivity(activity);
+}
+
 function deleteActivity(id) {
   const activity = activityById(id);
   if (!activity) return false;
@@ -647,16 +964,19 @@ async function requestNotificationPermission(showFeedback = true) {
 }
 
 function renderNotificationStatus() {
+  const card = $("notificationsCard");
   const supported = "Notification" in window;
   const permission = supported ? Notification.permission : "unsupported";
+  const hide = permission === "granted";
+  if (card) card.hidden = hide;
+  if (hide) return;
   const labels = {
-    granted: "Notifications actives : alerte une minute avant et à l’échéance.",
     denied: "Notifications bloquées : les alertes internes restent actives.",
     default: "Active-les pour être prévenu une minute avant la fin.",
     unsupported: "Notifications système indisponibles : les alertes internes restent actives.",
   };
-  $("notificationStatus").textContent = labels[permission];
-  $("btnNotifications").disabled = permission === "granted" || permission === "unsupported";
+  $("notificationStatus").textContent = labels[permission] || labels.default;
+  $("btnNotifications").disabled = permission === "unsupported";
 }
 
 function celebrate() {
@@ -683,18 +1003,6 @@ function writeSettingsForm() {
   $("maxSession").min = state.settings.minSession * 2;
 }
 
-function updateActivityDurationField() {
-  const optional = $("newActivityCategory").value === Logic.CATEGORY_OPTIONAL;
-  $("activityDurationLabel").firstChild.textContent = optional
-    ? "Plafond quotidien "
-    : "Objectif quotidien ";
-  $("newActivityDuration").required = !optional;
-  $("newActivityDuration").placeholder = optional ? "Optionnel" : "";
-  $("activityDurationHint").textContent = optional
-    ? "Laisse vide pour une activité sans plafond."
-    : "Durée à atteindre exactement chaque jour.";
-}
-
 function switchView(name) {
   const settings = name === "settings";
   $("gameView").hidden = settings;
@@ -704,8 +1012,507 @@ function switchView(name) {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  if (settings) writeSettingsForm();
+  if (settings) {
+    writeSettingsForm();
+    renderProfileTabs();
+  }
   window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function escapeCsv(value) {
+  const text = String(value ?? "");
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function splitCsvLine(line) {
+  const values = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quoted && char === '"' && line[index + 1] === '"') {
+      current += '"';
+      index += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      values.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  values.push(current);
+  return values;
+}
+
+const CSV_COLUMNS = [
+  "type",
+  "profileId",
+  "profileName",
+  "id",
+  "name",
+  "category",
+  "target",
+  "dailyCap",
+  "banned",
+  "emoji",
+  "date",
+  "planned",
+  "actual",
+  "startedAt",
+  "endedAt",
+  "key",
+  "value",
+];
+
+function serializeCsv() {
+  flushActiveProfile();
+  const rows = [CSV_COLUMNS];
+  for (const profile of state.profiles) {
+    rows.push([
+      "profile",
+      profile.id,
+      profile.name,
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+    ]);
+    for (const [key, value] of Object.entries(profile.settings)) {
+      rows.push([
+        "setting",
+        profile.id,
+        profile.name,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        key,
+        value,
+      ]);
+    }
+    for (const activity of profile.activities) {
+      rows.push([
+        "activity",
+        profile.id,
+        profile.name,
+        activity.id,
+        activity.name,
+        activity.category,
+        activity.targetMinutes ?? "",
+        activity.dailyCap ?? "",
+        activity.banned ? "1" : "0",
+        activity.emoji || "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+      ]);
+    }
+  }
+  for (const session of state.sessions) {
+    rows.push([
+      "session",
+      "",
+      "",
+      session.id,
+      session.activityName,
+      session.category,
+      "",
+      "",
+      "",
+      "",
+      session.date,
+      session.plannedMinutes,
+      session.actualMinutes,
+      session.startedAt,
+      session.endedAt,
+      session.activityId,
+      "",
+    ]);
+  }
+  rows.push([
+    "meta",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    currentDay,
+    "",
+    "",
+    "",
+    "",
+    "version",
+    STATE_VERSION,
+  ]);
+  rows.push([
+    "meta",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "activeProfileId",
+    state.activeProfileId,
+  ]);
+  return `${rows.map((row) => row.map(escapeCsv).join(",")).join("\n")}\n`;
+}
+
+function parseLegacySingleProfileCsv(lines, indexes) {
+  const settings = { ...DEFAULT_SETTINGS };
+  const activities = [];
+  const sessions = [];
+  const value = (columns, key) =>
+    indexes[key] == null ? "" : columns[indexes[key]] ?? "";
+
+  for (const line of lines.slice(1)) {
+    const columns = splitCsvLine(line);
+    const type = value(columns, "type");
+    if (type === "activity") {
+      const category =
+        value(columns, "category") === Logic.CATEGORY_OPTIONAL
+          ? Logic.CATEGORY_OPTIONAL
+          : Logic.CATEGORY_REQUIRED;
+      activities.push({
+        id: value(columns, "id") || makeId(value(columns, "name")),
+        name: value(columns, "name") || "Activité",
+        category,
+        targetMinutes:
+          category === Logic.CATEGORY_REQUIRED
+            ? Math.max(1, Number(value(columns, "target")) || 1)
+            : null,
+        dailyCap:
+          category === Logic.CATEGORY_OPTIONAL && value(columns, "dailyCap") !== ""
+            ? Math.max(1, Number(value(columns, "dailyCap")) || 1)
+            : null,
+        banned: value(columns, "banned") === "1",
+        emoji: normalizeEmoji(value(columns, "emoji")),
+      });
+    } else if (type === "setting") {
+      const key = value(columns, "key");
+      const raw = value(columns, "value");
+      if (key in settings) {
+        settings[key] = key.includes("Session") ? Number(raw) : raw;
+      }
+    } else if (type === "session") {
+      sessions.push({
+        id: value(columns, "id") || makeId("session"),
+        date: value(columns, "date"),
+        activityId: value(columns, "key"),
+        activityName: value(columns, "name"),
+        category: value(columns, "category"),
+        plannedMinutes: Number(value(columns, "planned")) || 0,
+        actualMinutes: Number(value(columns, "actual")) || 0,
+        startedAt: value(columns, "startedAt"),
+        endedAt: value(columns, "endedAt"),
+      });
+    }
+  }
+  if (!activities.length) throw new Error("Le CSV ne contient aucune activité.");
+  const profile = createProfile({
+    name: "Jeu 1",
+    settings,
+    activities,
+  });
+  return normalizeState({
+    profiles: [profile],
+    activeProfileId: profile.id,
+    sessions,
+  });
+}
+
+function parseCsv(text) {
+  const lines = String(text)
+    .split(/\r?\n/)
+    .filter((line) => line.trim());
+  if (!lines.length) throw new Error("Le fichier est vide.");
+  const header = splitCsvLine(lines[0]);
+  if (header.join(",").toLowerCase() === "type,name,num1,num2,text") {
+    return parseLegacyCsv(lines);
+  }
+  const indexes = Object.fromEntries(header.map((column, index) => [column, index]));
+  if (indexes.type == null) throw new Error("Format CSV non reconnu.");
+
+  const hasProfiles = lines
+    .slice(1)
+    .some((line) => splitCsvLine(line)[indexes.type] === "profile");
+  if (!hasProfiles) return parseLegacySingleProfileCsv(lines, indexes);
+
+  const profilesById = new Map();
+  const sessions = [];
+  let activeProfileId = "";
+  const value = (columns, key) =>
+    indexes[key] == null ? "" : columns[indexes[key]] ?? "";
+
+  for (const line of lines.slice(1)) {
+    const columns = splitCsvLine(line);
+    const type = value(columns, "type");
+    if (type === "profile") {
+      const id = value(columns, "profileId") || makeId("jeu");
+      profilesById.set(
+        id,
+        createProfile({
+          id,
+          name: value(columns, "profileName") || "Jeu",
+          settings: DEFAULT_SETTINGS,
+          activities: [],
+        })
+      );
+    }
+  }
+
+  for (const line of lines.slice(1)) {
+    const columns = splitCsvLine(line);
+    const type = value(columns, "type");
+    const profileId = value(columns, "profileId");
+    if (type === "setting") {
+      const profile =
+        profilesById.get(profileId) ||
+        [...profilesById.values()][0];
+      if (!profile) continue;
+      const key = value(columns, "key");
+      const raw = value(columns, "value");
+      if (key in profile.settings) {
+        profile.settings[key] = key.includes("Session") ? Number(raw) : raw;
+      }
+    } else if (type === "activity") {
+      let profile = profilesById.get(profileId);
+      if (!profile) {
+        profile = createProfile({
+          id: profileId || makeId("jeu"),
+          name: value(columns, "profileName") || "Jeu",
+          settings: DEFAULT_SETTINGS,
+          activities: [],
+        });
+        profilesById.set(profile.id, profile);
+      }
+      const category =
+        value(columns, "category") === Logic.CATEGORY_OPTIONAL
+          ? Logic.CATEGORY_OPTIONAL
+          : Logic.CATEGORY_REQUIRED;
+      profile.activities.push({
+        id: value(columns, "id") || makeId(value(columns, "name")),
+        name: value(columns, "name") || "Activité",
+        category,
+        targetMinutes:
+          category === Logic.CATEGORY_REQUIRED
+            ? Math.max(1, Number(value(columns, "target")) || 1)
+            : null,
+        dailyCap:
+          category === Logic.CATEGORY_OPTIONAL && value(columns, "dailyCap") !== ""
+            ? Math.max(1, Number(value(columns, "dailyCap")) || 1)
+            : null,
+        banned: value(columns, "banned") === "1",
+        emoji: normalizeEmoji(value(columns, "emoji")),
+      });
+    } else if (type === "session") {
+      sessions.push({
+        id: value(columns, "id") || makeId("session"),
+        date: value(columns, "date"),
+        activityId: value(columns, "key"),
+        activityName: value(columns, "name"),
+        category: value(columns, "category"),
+        plannedMinutes: Number(value(columns, "planned")) || 0,
+        actualMinutes: Number(value(columns, "actual")) || 0,
+        startedAt: value(columns, "startedAt"),
+        endedAt: value(columns, "endedAt"),
+      });
+    } else if (type === "meta" && value(columns, "key") === "activeProfileId") {
+      activeProfileId = value(columns, "value");
+    }
+  }
+
+  const profiles = [...profilesById.values()];
+  if (!profiles.length) throw new Error("Le CSV ne contient aucun jeu de réglages.");
+  return normalizeState({
+    profiles,
+    activeProfileId: activeProfileId || profiles[0].id,
+    sessions,
+  });
+}
+
+function parseLegacyCsv(lines) {
+  const settings = { ...DEFAULT_SETTINGS };
+  const activities = [];
+  const sessions = [];
+  const legacyProgress = new Map();
+  const idsByName = new Map();
+  let fileDate = currentDay;
+
+  for (const line of lines.slice(1)) {
+    const columns = splitCsvLine(line);
+    const [type, name, num1, num2, text] = columns;
+    if (type === "activity") {
+      const id = makeId(name);
+      idsByName.set(name, id);
+      activities.push({
+        id,
+        name,
+        category: Logic.CATEGORY_REQUIRED,
+        targetMinutes: Math.max(1, Number(num1) || 1),
+        dailyCap: null,
+        banned: false,
+        emoji: "",
+      });
+      legacyProgress.set(id, Number(num2) || 0);
+    } else if (type === "setting") {
+      if (name === "min_session") settings.minSession = Number(num1) || 15;
+      if (name === "max_session") settings.maxSession = Number(num1) || 40;
+      if (name === "lunch_start") settings.pauseStart = text || "12:30";
+      if (name === "lunch_end") settings.pauseEnd = text || "13:30";
+      if (name === "day_end") settings.dayEnd = text || "17:00";
+    } else if (type === "meta" && name === "date") {
+      fileDate = text || currentDay;
+    } else if (type === "session") {
+      const [date, startedAt, endedAt] = String(text || "").split("|");
+      sessions.push({
+        id: makeId("session"),
+        date: date || fileDate,
+        activityId: idsByName.get(name) || "",
+        activityName: name,
+        category: Logic.CATEGORY_REQUIRED,
+        plannedMinutes: Number(num1) || 0,
+        actualMinutes: Number(num1) || 0,
+        startedAt: startedAt || `${fileDate}T00:00:00`,
+        endedAt: endedAt || `${fileDate}T00:00:00`,
+      });
+    }
+  }
+  for (const activity of activities) {
+    const logged = Logic.actualMinutesDone(activity, sessions, fileDate);
+    const missing = Math.max(0, (legacyProgress.get(activity.id) || 0) - logged);
+    if (missing > 0 && fileDate === currentDay) {
+      sessions.push({
+        id: makeId("migration"),
+        date: fileDate,
+        activityId: activity.id,
+        activityName: activity.name,
+        category: activity.category,
+        plannedMinutes: missing,
+        actualMinutes: missing,
+        startedAt: `${fileDate}T00:00:00`,
+        endedAt: `${fileDate}T00:00:00`,
+      });
+    }
+  }
+  if (!activities.length) throw new Error("Le CSV ne contient aucune activité.");
+  const profile = createProfile({ name: "Jeu 1", settings, activities });
+  return normalizeState({
+    profiles: [profile],
+    activeProfileId: profile.id,
+    sessions,
+  });
+}
+
+function downloadCsv() {
+  const blob = new Blob([serializeCsv()], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `casino-du-pomodoro-${currentDay}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  $("fileStatus").textContent =
+    "Export téléchargé : tous les onglets et l’historique sont inclus.";
+}
+
+function queueFileWrite() {
+  if (!linkedFileHandle) return;
+  fileWriteQueue = fileWriteQueue
+    .then(async () => {
+      const writable = await linkedFileHandle.createWritable();
+      await writable.write(serializeCsv());
+      await writable.close();
+      $("fileStatus").textContent = `Synchronisé avec ${linkedFileHandle.name}.`;
+    })
+    .catch((error) => {
+      console.warn("Synchronisation CSV impossible.", error);
+      $("fileStatus").textContent =
+        "Sauvegarde locale active, mais la synchronisation CSV a échoué.";
+    });
+}
+
+async function linkCsvFile() {
+  if (!window.showOpenFilePicker) {
+    showToast("Liaison directe indisponible : importe ou exporte le CSV.");
+    $("fileImport").click();
+    return;
+  }
+  try {
+    const [handle] = await window.showOpenFilePicker({
+      types: [
+        {
+          description: "Données Casino du Pomodoro",
+          accept: { "text/csv": [".csv"] },
+        },
+      ],
+      multiple: false,
+    });
+    const file = await handle.getFile();
+    if (file.size > 0) {
+      state = parseCsv(await file.text());
+      persistState({ syncFile: false });
+    }
+    linkedFileHandle = handle;
+    $("btnSaveFile").disabled = false;
+    queueFileWrite();
+    writeSettingsForm();
+    showToast("CSV lié. Toute l’application sera synchronisée.");
+    renderAll();
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      showToast(`Impossible de lier ce fichier : ${error.message}`);
+    }
+  }
+}
+
+async function importCsvFile(file) {
+  try {
+    state = parseCsv(await file.text());
+    persistState();
+    writeSettingsForm();
+    $("fileStatus").textContent = `Import réussi : ${file.name}.`;
+    showToast(`Données importées depuis « ${file.name} ».`);
+    renderAll();
+  } catch (error) {
+    showToast(`Import impossible : ${error.message}`);
+  }
 }
 
 function initEvents() {
@@ -716,14 +1523,22 @@ function initEvents() {
   $("btnStart").addEventListener("click", startSession);
   $("btnValidate").addEventListener("click", finishSession);
   $("btnNotifications").addEventListener("click", () => requestNotificationPermission(true));
+  $("btnExport").addEventListener("click", downloadCsv);
+  $("btnLinkFile").addEventListener("click", linkCsvFile);
+  $("btnSaveFile").addEventListener("click", queueFileWrite);
+  $("fileImport").addEventListener("change", (event) => {
+    const file = event.target.files?.[0];
+    if (file) importCsvFile(file);
+    event.target.value = "";
+  });
 
   $("scheduleForm").addEventListener("submit", (event) => {
     event.preventDefault();
     const candidate = {
       minSession: Number($("minSession").value),
       maxSession: Number($("maxSession").value),
-      pauseStart: $("pauseStart").value,
-      pauseEnd: $("pauseEnd").value,
+      pauseStart: $("pauseStart").value.trim(),
+      pauseEnd: $("pauseEnd").value.trim(),
       dayEnd: $("dayEnd").value,
     };
     const errors = Logic.validateSettings(candidate);
@@ -739,32 +1554,22 @@ function initEvents() {
   $("minSession").addEventListener("input", () => {
     $("maxSession").min = Math.max(2, Number($("minSession").value) * 2);
   });
-  $("newActivityCategory").addEventListener("change", updateActivityDurationField);
-  $("activityForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const name = $("newActivityName").value.trim();
-    const category = $("newActivityCategory").value;
-    const rawDuration = $("newActivityDuration").value;
-    const duration = rawDuration === "" ? null : Math.max(1, Number(rawDuration) || 1);
-    if (!name || (category === Logic.CATEGORY_REQUIRED && !duration)) return;
-    state.activities.push({
-      id: makeId(name),
-      name,
-      category,
-      targetMinutes: category === Logic.CATEGORY_REQUIRED ? duration : null,
-      dailyCap: category === Logic.CATEGORY_OPTIONAL ? duration : null,
-      banned: false,
-    });
-    event.target.reset();
-    updateActivityDurationField();
-    persistState();
-    showToast(`« ${name} » rejoint le jeu.`);
-    renderAll();
-  });
 
   document.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
+    if (button.id === "btnAddActivity") {
+      addActivity();
+      return;
+    }
+    if (button.id === "btnAddProfile") {
+      addProfile();
+      return;
+    }
+    if (button.dataset.deleteProfile) {
+      deleteProfile(button.dataset.deleteProfile);
+      return;
+    }
     if (button.dataset.moveUp) moveActivity(button.dataset.moveUp, -1);
     if (button.dataset.moveDown) moveActivity(button.dataset.moveDown, 1);
     if (button.dataset.delete) {
@@ -777,12 +1582,44 @@ function initEvents() {
       }
     }
   });
+  document.addEventListener("focusin", (event) => {
+    const field = event.target;
+    if (!(field instanceof HTMLInputElement) || !field.dataset.selectProfile) return;
+    const id = field.dataset.selectProfile;
+    if (id === state.activeProfileId) return;
+    switchProfile(id);
+    const next = document.querySelector(`[data-rename-profile="${CSS.escape(id)}"]`);
+    if (next) next.focus();
+  });
   document.addEventListener("change", (event) => {
-    const input = event.target;
-    if (!(input instanceof HTMLInputElement) || !input.dataset.toggleActivity) return;
-    const id = input.dataset.toggleActivity;
-    const ok = input.checked ? restoreActivity(id) : banActivity(id);
-    if (!ok) input.checked = !input.checked;
+    const field = event.target;
+    if (!(field instanceof HTMLInputElement || field instanceof HTMLSelectElement)) return;
+    if (field instanceof HTMLInputElement && field.dataset.toggleActivity) {
+      const id = field.dataset.toggleActivity;
+      const ok = field.checked ? restoreActivity(id) : banActivity(id);
+      if (!ok) field.checked = !field.checked;
+      return;
+    }
+    if (field.dataset.renameProfile) {
+      renameProfile(field.dataset.renameProfile, field.value);
+      return;
+    }
+    if (field.dataset.emojiActivity) setActivityEmoji(field.dataset.emojiActivity, field.value);
+    if (field.dataset.nameActivity) setActivityName(field.dataset.nameActivity, field.value);
+    if (field.dataset.categoryActivity) setActivityCategory(field.dataset.categoryActivity, field.value);
+    if (field.dataset.durationActivity) setActivityDuration(field.dataset.durationActivity, field.value);
+  });
+  document.addEventListener("keydown", (event) => {
+    const field = event.target;
+    if (!(field instanceof HTMLInputElement) || !field.dataset.renameProfile) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      field.blur();
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      renderProfileTabs();
+    }
   });
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
@@ -795,7 +1632,7 @@ function initEvents() {
 function init() {
   ensureCurrentDay();
   writeSettingsForm();
-  updateActivityDurationField();
+  if (Wheel) Wheel.mount();
   initEvents();
   renderAll();
   tick();
