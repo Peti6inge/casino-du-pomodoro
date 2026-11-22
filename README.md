@@ -12,7 +12,7 @@ python3 -m http.server 8080
 
 Puis ouvrir [http://localhost:8080](http://localhost:8080).
 
-Les notifications système et l’API File System Access nécessitent `localhost` ou HTTPS. Chrome et Edge offrent le support le plus complet pour la liaison directe d’un CSV.
+Les notifications système nécessitent `localhost` ou HTTPS.
 
 ## Fonctionnement
 
@@ -49,18 +49,9 @@ Le temps ouvrable est recalculé avec le timestamp courant à chaque tirage. La 
 
 ## Persistance
 
-`localStorage` est la source principale : paramètres, activités, ordre, bannissements, historique et session active sont enregistrés après chaque mutation.
+Tout est enregistré automatiquement dans `localStorage` : paramètres, activités, ordre, réserves, historique et session active, après chaque modification.
 
 Le changement de date remet implicitement les compteurs à zéro, car toutes les progressions sont calculées depuis les sessions du jour. La configuration et l’historique restent conservés.
-
-Le CSV sert de sauvegarde et de moyen de transfert :
-
-- export manuel à tout moment ;
-- import du format V2 ;
-- import rétrocompatible du format V1 ;
-- synchronisation automatique pendant la session navigateur lorsqu’un fichier est lié.
-
-Le navigateur ne garantit pas la conservation de l’autorisation d’écriture d’un fichier lié après sa fermeture. La sauvegarde locale continue donc de fonctionner indépendamment.
 
 ## Tests
 
@@ -78,7 +69,7 @@ Les tests couvrent le temps ouvrable, les pondérations, le mode urgence, l’an
 index.html          interface Jeu et Paramètres
 styles.css          thème responsive et animations
 logic.js            moteur temporel et probabiliste
-app.js              interface, chrono, stockage et CSV
+app.js              interface, chrono et stockage local
 tests/logic.test.js tests unitaires sans dépendance
 ```
 

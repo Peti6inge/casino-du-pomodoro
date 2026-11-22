@@ -47,8 +47,7 @@ select {
   font: inherit;
 }
 
-button,
-.file-label {
+button {
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -581,24 +580,79 @@ a:focus-visible {
   font-size: 1.05rem;
 }
 
-.ban-button,
-.restore-button,
-.order-button {
+.order-button,
+.delete-button {
   display: inline-grid;
   place-items: center;
   border: 0;
   cursor: pointer;
 }
 
-.ban-button {
-  width: 34px;
-  height: 34px;
-  color: #9a91ad;
-  background: #f5f1f8;
-  border-radius: 12px;
+.toggle-switch {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  cursor: pointer;
 }
 
-.ban-button:hover {
+.toggle-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.toggle-track {
+  position: relative;
+  display: block;
+  width: 38px;
+  height: 22px;
+  background: #cfc6d8;
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+
+.toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(48, 23, 95, 0.22);
+  transition: transform 0.2s ease;
+}
+
+.toggle-switch input:checked + .toggle-track {
+  background: var(--mint);
+}
+
+.toggle-switch input:checked + .toggle-track .toggle-thumb {
+  transform: translateX(16px);
+}
+
+.toggle-switch input:focus-visible + .toggle-track {
+  outline: 4px solid rgba(75, 170, 247, 0.35);
+  outline-offset: 2px;
+}
+
+.delete-button {
+  width: 31px;
+  height: 31px;
+  color: #c07a86;
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(63, 38, 124, 0.09);
+}
+
+.delete-button:hover {
   color: white;
   background: var(--coral);
 }
@@ -687,16 +741,6 @@ a:focus-visible {
   font-size: 0.82rem;
   font-weight: 800;
   background: #f4f0f7;
-  border-radius: 999px;
-}
-
-.restore-button {
-  min-height: 29px;
-  padding: 0 10px;
-  color: white;
-  font-size: 0.74rem;
-  font-weight: 900;
-  background: var(--purple);
   border-radius: 999px;
 }
 
@@ -996,17 +1040,6 @@ select:focus {
 
 .order-button:disabled {
   opacity: 0.3;
-}
-
-.button-cluster {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 9px;
-}
-
-.file-label {
-  display: inline-flex;
-  cursor: pointer;
 }
 
 .toast-region {

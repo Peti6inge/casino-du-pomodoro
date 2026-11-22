@@ -51,8 +51,6 @@ const clone = (value) => JSON.parse(JSON.stringify(value));
 
 let state = loadState();
 let currentDay = "";
-let linkedFileHandle = null;
-let fileWriteQueue = Promise.resolve();
 let uiMessage = "";
 
 function makeId(name = "activité") {
@@ -125,14 +123,13 @@ function loadState() {
   }
 }
 
-function persistState({ syncFile = true } = {}) {
+function persistState() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (error) {
-    showToast("La sauvegarde locale a échoué. Pense à exporter tes données.");
+    showToast("Impossible d’enregistrer localement. Vérifie l’espace de stockage du navigateur.");
     console.warn(error);
   }
-  if (syncFile && linkedFileHandle) queueFileWrite();
 }
 
 function ensureCurrentDay(now = new Date()) {
@@ -187,6 +184,27 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function activityToggleMarkup(activity) {
+  const enabled = !activity.banned;
+  return `
+    <label class="toggle-switch">
+      <input type="checkbox" data-toggle-activity="${escapeHtml(activity.id)}" ${enabled ? "checked" : ""}
+        aria-label="${enabled ? "Mettre en réserve" : "Réactiver"} ${escapeHtml(activity.name)}" />
+      <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
+    </label>`;
+}
+
+function deleteButtonMarkup(id, name) {
+  return `
+    <button type="button" class="delete-button" data-delete="${escapeHtml(id)}"
+      aria-label="Supprimer ${escapeHtml(name)} définitivement" title="Supprimer définitivement">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
+      </svg>
+    </button>`;
 }
 
 function setMessage(message) {
@@ -275,8 +293,7 @@ function activityCard(activity) {
     <article class="activity-card ${optional ? "optional" : ""}">
       <div class="activity-card-top">
         <h3>${escapeHtml(activity.name)}</h3>
-        <button type="button" class="ban-button" data-ban="${escapeHtml(activity.id)}"
-          aria-label="Mettre ${escapeHtml(activity.name)} en réserve" title="Mettre en réserve">⌫</button>
+        ${activityToggleMarkup(activity)}
       </div>
       ${target ? `<div class="progress-track" aria-label="${percentage} %"><div class="progress-fill" style="--progress:${percentage}%"></div></div>` : ""}
       <div class="activity-stats">
@@ -326,7 +343,8 @@ function renderActivities() {
         .map(
           (activity) => `
             <span class="banned-item">${escapeHtml(activity.name)}
-              <button type="button" class="restore-button" data-restore="${escapeHtml(activity.id)}">Réactiver</button>
+              ${activityToggleMarkup(activity)}
+              ${deleteButtonMarkup(activity.id, activity.name)}
             </span>`
         )
         .join("")
@@ -383,8 +401,8 @@ function renderActivityManager() {
                   aria-label="Monter" ${index === 0 ? "disabled" : ""}>↑</button>
                 <button type="button" class="order-button" data-move-down="${escapeHtml(activity.id)}"
                   aria-label="Descendre" ${index === state.activities.length - 1 ? "disabled" : ""}>↓</button>
-                <button type="button" class="order-button" data-${activity.banned ? "restore" : "ban"}="${escapeHtml(activity.id)}"
-                  aria-label="${activity.banned ? "Réactiver" : "Mettre en réserve"}">${activity.banned ? "↺" : "⌫"}</button>
+                ${activityToggleMarkup(activity)}
+                ${deleteButtonMarkup(activity.id, activity.name)}
               </div>
             </div>`;
         })
@@ -534,25 +552,43 @@ function tick() {
 
 function banActivity(id) {
   const activity = activityById(id);
-  if (!activity) return;
+  if (!activity) return false;
   if (state.activeSession?.activityId === id) {
     showToast("Cette activité est en cours : clôture-la avant de la mettre en réserve.");
-    return;
+    return false;
   }
   activity.banned = true;
   if (state.activeDraw?.activityId === id) state.activeDraw = null;
   persistState();
   setMessage(`« ${activity.name} » est en réserve et ne participe plus aux tirages.`);
   renderAll();
+  return true;
 }
 
 function restoreActivity(id) {
   const activity = activityById(id);
-  if (!activity) return;
+  if (!activity) return false;
   activity.banned = false;
   persistState();
   setMessage(`« ${activity.name} » est de retour dans le jeu.`);
   renderAll();
+  return true;
+}
+
+function deleteActivity(id) {
+  const activity = activityById(id);
+  if (!activity) return false;
+  if (state.activeSession?.activityId === id) {
+    showToast("Cette activité est en cours : clôture-la avant de la supprimer.");
+    return false;
+  }
+  if (state.activeDraw?.activityId === id) state.activeDraw = null;
+  if (state.lastOptionalActivityId === id) state.lastOptionalActivityId = null;
+  state.activities = state.activities.filter((item) => item.id !== id);
+  persistState();
+  setMessage(`« ${activity.name} » a été supprimée définitivement.`);
+  renderAll();
+  return true;
 }
 
 function moveActivity(id, direction) {
@@ -672,259 +708,6 @@ function switchView(name) {
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
-function escapeCsv(value) {
-  const text = String(value ?? "");
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-function splitCsvLine(line) {
-  const values = [];
-  let current = "";
-  let quoted = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    if (quoted && char === '"' && line[index + 1] === '"') {
-      current += '"';
-      index += 1;
-    } else if (char === '"') {
-      quoted = !quoted;
-    } else if (char === "," && !quoted) {
-      values.push(current);
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-  values.push(current);
-  return values;
-}
-
-const CSV_COLUMNS = [
-  "type", "id", "name", "category", "target", "dailyCap", "banned", "date",
-  "planned", "actual", "startedAt", "endedAt", "key", "value",
-];
-
-function serializeCsv() {
-  const rows = [CSV_COLUMNS];
-  for (const activity of state.activities) {
-    rows.push([
-      "activity", activity.id, activity.name, activity.category,
-      activity.targetMinutes ?? "", activity.dailyCap ?? "", activity.banned ? "1" : "0",
-      "", "", "", "", "", "", "",
-    ]);
-  }
-  for (const [key, value] of Object.entries(state.settings)) {
-    rows.push(["setting", "", "", "", "", "", "", "", "", "", "", "", key, value]);
-  }
-  for (const session of state.sessions) {
-    rows.push([
-      "session", session.id, session.activityName, session.category, "", "", "",
-      session.date, session.plannedMinutes, session.actualMinutes,
-      session.startedAt, session.endedAt, session.activityId, "",
-    ]);
-  }
-  rows.push(["meta", "", "", "", "", "", "", currentDay, "", "", "", "", "version", STATE_VERSION]);
-  return `${rows.map((row) => row.map(escapeCsv).join(",")).join("\n")}\n`;
-}
-
-function parseCsv(text) {
-  const lines = String(text)
-    .split(/\r?\n/)
-    .filter((line) => line.trim());
-  if (!lines.length) throw new Error("Le fichier est vide.");
-  const header = splitCsvLine(lines[0]);
-  if (header.join(",").toLowerCase() === "type,name,num1,num2,text") {
-    return parseLegacyCsv(lines);
-  }
-  const indexes = Object.fromEntries(header.map((column, index) => [column, index]));
-  if (indexes.type == null || indexes.id == null) throw new Error("Format CSV non reconnu.");
-  const imported = defaultState();
-  imported.activities = [];
-  imported.sessions = [];
-
-  const value = (columns, key) => columns[indexes[key]] ?? "";
-  for (const line of lines.slice(1)) {
-    const columns = splitCsvLine(line);
-    const type = value(columns, "type");
-    if (type === "activity") {
-      const category =
-        value(columns, "category") === Logic.CATEGORY_OPTIONAL
-          ? Logic.CATEGORY_OPTIONAL
-          : Logic.CATEGORY_REQUIRED;
-      imported.activities.push({
-        id: value(columns, "id") || makeId(value(columns, "name")),
-        name: value(columns, "name") || "Activité",
-        category,
-        targetMinutes:
-          category === Logic.CATEGORY_REQUIRED
-            ? Math.max(1, Number(value(columns, "target")) || 1)
-            : null,
-        dailyCap:
-          category === Logic.CATEGORY_OPTIONAL && value(columns, "dailyCap") !== ""
-            ? Math.max(1, Number(value(columns, "dailyCap")) || 1)
-            : null,
-        banned: value(columns, "banned") === "1",
-      });
-    } else if (type === "setting") {
-      const key = value(columns, "key");
-      const raw = value(columns, "value");
-      if (key in imported.settings) {
-        imported.settings[key] = key.includes("Session") ? Number(raw) : raw;
-      }
-    } else if (type === "session") {
-      imported.sessions.push({
-        id: value(columns, "id") || makeId("session"),
-        date: value(columns, "date"),
-        activityId: value(columns, "key"),
-        activityName: value(columns, "name"),
-        category: value(columns, "category"),
-        plannedMinutes: Number(value(columns, "planned")) || 0,
-        actualMinutes: Number(value(columns, "actual")) || 0,
-        startedAt: value(columns, "startedAt"),
-        endedAt: value(columns, "endedAt"),
-      });
-    }
-  }
-  if (!imported.activities.length) throw new Error("Le CSV ne contient aucune activité.");
-  return normalizeState(imported);
-}
-
-function parseLegacyCsv(lines) {
-  const imported = defaultState();
-  imported.activities = [];
-  imported.sessions = [];
-  const legacyProgress = new Map();
-  const idsByName = new Map();
-  let fileDate = currentDay;
-
-  for (const line of lines.slice(1)) {
-    const columns = splitCsvLine(line);
-    const [type, name, num1, num2, text] = columns;
-    if (type === "activity") {
-      const id = makeId(name);
-      idsByName.set(name, id);
-      imported.activities.push({
-        id,
-        name,
-        category: Logic.CATEGORY_REQUIRED,
-        targetMinutes: Math.max(1, Number(num1) || 1),
-        dailyCap: null,
-        banned: false,
-      });
-      legacyProgress.set(id, Number(num2) || 0);
-    } else if (type === "setting") {
-      if (name === "min_session") imported.settings.minSession = Number(num1) || 15;
-      if (name === "max_session") imported.settings.maxSession = Number(num1) || 40;
-      if (name === "lunch_start") imported.settings.pauseStart = text || "12:30";
-      if (name === "lunch_end") imported.settings.pauseEnd = text || "13:30";
-      if (name === "day_end") imported.settings.dayEnd = text || "17:00";
-    } else if (type === "meta" && name === "date") {
-      fileDate = text || currentDay;
-    } else if (type === "session") {
-      const [date, startedAt, endedAt] = String(text || "").split("|");
-      imported.sessions.push({
-        id: makeId("session"),
-        date: date || fileDate,
-        activityId: idsByName.get(name) || "",
-        activityName: name,
-        category: Logic.CATEGORY_REQUIRED,
-        plannedMinutes: Number(num1) || 0,
-        actualMinutes: Number(num1) || 0,
-        startedAt: startedAt || `${fileDate}T00:00:00`,
-        endedAt: endedAt || `${fileDate}T00:00:00`,
-      });
-    }
-  }
-  for (const activity of imported.activities) {
-    const logged = Logic.actualMinutesDone(activity, imported.sessions, fileDate);
-    const missing = Math.max(0, (legacyProgress.get(activity.id) || 0) - logged);
-    if (missing > 0 && fileDate === currentDay) {
-      imported.sessions.push({
-        id: makeId("migration"),
-        date: fileDate,
-        activityId: activity.id,
-        activityName: activity.name,
-        category: activity.category,
-        plannedMinutes: missing,
-        actualMinutes: missing,
-        startedAt: `${fileDate}T00:00:00`,
-        endedAt: `${fileDate}T00:00:00`,
-      });
-    }
-  }
-  if (!imported.activities.length) throw new Error("Le CSV ne contient aucune activité.");
-  return normalizeState(imported);
-}
-
-function downloadCsv() {
-  const blob = new Blob([serializeCsv()], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `casino-du-pomodoro-${currentDay}.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-  $("fileStatus").textContent = "Export téléchargé. La sauvegarde locale reste active.";
-}
-
-function queueFileWrite() {
-  if (!linkedFileHandle) return;
-  fileWriteQueue = fileWriteQueue
-    .then(async () => {
-      const writable = await linkedFileHandle.createWritable();
-      await writable.write(serializeCsv());
-      await writable.close();
-      $("fileStatus").textContent = `Synchronisé avec ${linkedFileHandle.name}.`;
-    })
-    .catch((error) => {
-      console.warn("Synchronisation CSV impossible.", error);
-      $("fileStatus").textContent =
-        "Sauvegarde locale active, mais la synchronisation CSV a échoué.";
-    });
-}
-
-async function linkCsvFile() {
-  if (!window.showOpenFilePicker) {
-    showToast("Liaison directe indisponible : importe ou exporte le CSV.");
-    $("fileImport").click();
-    return;
-  }
-  try {
-    const [handle] = await window.showOpenFilePicker({
-      types: [{ description: "Données Casino du Pomodoro", accept: { "text/csv": [".csv"] } }],
-      multiple: false,
-    });
-    const file = await handle.getFile();
-    if (file.size > 0) {
-      state = parseCsv(await file.text());
-      persistState({ syncFile: false });
-    }
-    linkedFileHandle = handle;
-    $("btnSaveFile").disabled = false;
-    queueFileWrite();
-    writeSettingsForm();
-    setMessage("CSV importé et lié. La sauvegarde locale reste la source principale.");
-    renderAll();
-  } catch (error) {
-    if (error.name !== "AbortError") {
-      showToast(`Impossible de lier ce fichier : ${error.message}`);
-    }
-  }
-}
-
-async function importCsvFile(file) {
-  try {
-    state = parseCsv(await file.text());
-    persistState();
-    writeSettingsForm();
-    setMessage(`Données importées depuis « ${file.name} ».`);
-    $("fileStatus").textContent = `Import réussi : ${file.name}.`;
-    renderAll();
-  } catch (error) {
-    showToast(`Import impossible : ${error.message}`);
-  }
-}
-
 function initEvents() {
   document.querySelectorAll("[data-view]").forEach((button) => {
     button.addEventListener("click", () => switchView(button.dataset.view));
@@ -933,14 +716,6 @@ function initEvents() {
   $("btnStart").addEventListener("click", startSession);
   $("btnValidate").addEventListener("click", finishSession);
   $("btnNotifications").addEventListener("click", () => requestNotificationPermission(true));
-  $("btnLinkFile").addEventListener("click", linkCsvFile);
-  $("btnSaveFile").addEventListener("click", queueFileWrite);
-  $("btnExport").addEventListener("click", downloadCsv);
-  $("fileImport").addEventListener("change", (event) => {
-    const file = event.target.files?.[0];
-    if (file) importCsvFile(file);
-    event.target.value = "";
-  });
 
   $("scheduleForm").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -990,10 +765,24 @@ function initEvents() {
   document.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (!button) return;
-    if (button.dataset.ban) banActivity(button.dataset.ban);
-    if (button.dataset.restore) restoreActivity(button.dataset.restore);
     if (button.dataset.moveUp) moveActivity(button.dataset.moveUp, -1);
     if (button.dataset.moveDown) moveActivity(button.dataset.moveDown, 1);
+    if (button.dataset.delete) {
+      const activity = activityById(button.dataset.delete);
+      if (
+        activity &&
+        confirm(`Supprimer définitivement « ${activity.name} » ? Cette action est irréversible.`)
+      ) {
+        deleteActivity(button.dataset.delete);
+      }
+    }
+  });
+  document.addEventListener("change", (event) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || !input.dataset.toggleActivity) return;
+    const id = input.dataset.toggleActivity;
+    const ok = input.checked ? restoreActivity(id) : banActivity(id);
+    if (!ok) input.checked = !input.checked;
   });
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {

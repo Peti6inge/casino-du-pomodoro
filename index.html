@@ -193,42 +193,22 @@
             <span class="card-icon mint" aria-hidden="true">☰</span>
             <div>
               <h2>Ordre et disponibilité</h2>
-              <p>En cas d’urgence, la première mission obligatoire active gagne toujours.</p>
+              <p>Active ou mets en réserve avec l’interrupteur ; supprime une activité avec la corbeille.</p>
             </div>
           </div>
           <div id="activityManager" class="activity-manager"></div>
         </section>
 
-        <div class="settings-layout">
-          <section class="settings-card">
-            <div class="card-title">
-              <span class="card-icon yellow" aria-hidden="true">⇄</span>
-              <div>
-                <h2>Sauvegarde</h2>
-                <p id="fileStatus">Sauvegarde automatique locale active.</p>
-              </div>
+        <section class="settings-card">
+          <div class="card-title">
+            <span class="card-icon blue" aria-hidden="true">♬</span>
+            <div>
+              <h2>Notifications</h2>
+              <p id="notificationStatus">Active-les pour être prévenu une minute avant la fin.</p>
             </div>
-            <div class="button-cluster">
-              <button type="button" id="btnLinkFile" class="soft-button yellow">Lier un CSV</button>
-              <button type="button" id="btnSaveFile" class="soft-button neutral" disabled>Synchroniser</button>
-              <button type="button" id="btnExport" class="soft-button neutral">Exporter</button>
-              <label class="soft-button neutral file-label">Importer
-                <input type="file" id="fileImport" accept=".csv,text/csv" hidden />
-              </label>
-            </div>
-          </section>
-
-          <section class="settings-card">
-            <div class="card-title">
-              <span class="card-icon blue" aria-hidden="true">♬</span>
-              <div>
-                <h2>Notifications</h2>
-                <p id="notificationStatus">Active-les pour être prévenu une minute avant la fin.</p>
-              </div>
-            </div>
-            <button type="button" id="btnNotifications" class="soft-button blue">Activer les notifications</button>
-          </section>
-        </div>
+          </div>
+          <button type="button" id="btnNotifications" class="soft-button blue">Activer les notifications</button>
+        </section>
       </section>
     </main>
   </div>
