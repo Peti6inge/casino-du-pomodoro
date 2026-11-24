@@ -752,8 +752,12 @@ a:focus-visible {
 .activity-card.has-fill h3,
 .activity-card.has-fill .activity-stats {
   color: #fff;
-  -webkit-text-stroke: 3.5px #000000;
+  -webkit-text-stroke: 3px #000000;
   paint-order: stroke fill;
+  text-shadow: 0 1.55px 0 #17151d,
+    0 -1.55px 0 #17151d,
+    1.55px 0 0 #17151d,
+    -1.55px 0 0 #17151d;
 }
 
 .activity-card::after {
@@ -891,8 +895,8 @@ a:focus-visible {
   gap: 10px;
   margin-top: 14px;
   color: var(--muted);
-  font-size: 0.85rem;
-  font-weight: 700;
+  font-size: 1rem;
+  font-weight: 650;
 }
 
 .activity-stat-main {
