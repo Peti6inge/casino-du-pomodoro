@@ -335,9 +335,9 @@ function formatFriendly(minutes) {
   const rounded = Math.max(0, Math.round(Number(minutes) || 0));
   const hours = Math.floor(rounded / 60);
   const rest = rounded % 60;
-  if (!hours) return `${rest} min`;
-  if (!rest) return `${hours} h`;
-  return `${hours} h ${String(rest).padStart(2, "0")} min`;
+  if (!hours) return `${rest}min`;
+  if (!rest) return `${hours}h`;
+  return `${hours}h ${String(rest).padStart(2, "0")}min`;
 }
 
 function formatTimer(milliseconds) {
@@ -372,7 +372,10 @@ function activityEmojiPrefix(activity) {
 }
 
 function activityTitleHtml(activity) {
-  return `${escapeHtml(activityEmojiPrefix(activity))}${escapeHtml(activity.name)}`;
+  const emoji = normalizeEmoji(activity?.emoji);
+  const name = escapeHtml(activity.name);
+  if (!emoji) return `<span class="activity-title-name">${name}</span>`;
+  return `<span class="activity-title-emoji" aria-hidden="true">${escapeHtml(emoji)}</span><span class="activity-title-name">${name}</span>`;
 }
 
 function activityToggleMarkup(activity) {
@@ -494,15 +497,16 @@ function activityCard(activity) {
   const percentage = target ? Math.min(100, Math.round((progress / target) * 100)) : 0;
   const primary = optional
     ? `${formatFriendly(actual)} consacrées`
-    : `${formatFriendly(progress)} sur ${formatFriendly(activity.targetMinutes)}`;
+    : `${formatFriendly(Math.max(0, activity.targetMinutes - progress))} sur ${formatFriendly(activity.targetMinutes)} restantes`;
   const secondary = optional
     ? activity.dailyCap
-      ? `${formatFriendly(Math.max(0, activity.dailyCap - actual))} disponibles`
+      ? `${formatFriendly(Math.max(0, activity.dailyCap - actual))} sur ${formatFriendly(activity.dailyCap)} restantes`
       : "Sans plafond quotidien"
     : `${percentage} % complété`;
 
   const reserved = activity.banned;
-  const fillable = Boolean(target);
+  const uncappedOptional = optional && activity.dailyCap == null;
+  const fillable = Boolean(target) || uncappedOptional;
   const roomForManualAdd = optional && activity.dailyCap != null
     ? Math.max(0, activity.dailyCap - actual)
     : 5;
@@ -791,13 +795,12 @@ function tick() {
   );
   const target = state.activeSession.plannedMinutes * 60000;
   const warningAt = Math.max(0, target - 60000);
-  $("timerDisplay").textContent = formatTimer(elapsed);
+  const remaining = Math.max(0, target - elapsed);
+  $("timerDisplay").textContent = formatTimer(remaining);
   $("timerTarget").textContent = `sur ${formatFriendly(state.activeSession.plannedMinutes)}`;
-  $("timerMessage").textContent =
-    "Le chrono continue tant que tu ne clôtures pas la session.";
   $("timerRing").style.setProperty(
     "--timer-progress",
-    `${Math.min(100, (elapsed / target) * 100)}%`
+    `${Math.min(100, (remaining / target) * 100)}%`
   );
 
   if (!state.activeSession.warningSent && elapsed >= warningAt && elapsed < target) {

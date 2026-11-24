@@ -145,7 +145,7 @@ a:focus-visible {
   color: #5d36b8;
   font-size: 0.64rem;
   font-weight: 900;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
 }
 
@@ -204,10 +204,15 @@ a:focus-visible {
   color: rgba(255, 255, 255, 0.76);
 }
 
+.day-strip .eyebrow {
+  letter-spacing: 0.05em;
+}
+
 .day-countdown {
   font-size: 1.3rem;
   font-variant-numeric: tabular-nums;
-  font-weight: 950;
+  font-weight: 750;
+  letter-spacing: -0.04em;
 }
 
 .day-strip-status {
@@ -299,7 +304,7 @@ a:focus-visible {
 .wheel-arena {
   display: grid;
   place-items: center;
-  width: min(330px, 90vw);
+  width: min(400px, 90vw);
   margin: 4px auto 16px;
   aspect-ratio: 1;
 }
@@ -433,7 +438,7 @@ a:focus-visible {
   font-size: 17px;
   font-weight: 400;
   stroke: rgba(45, 34, 80, 0.35);
-  stroke-width: 1.2px;
+  stroke-width: 0.6px;
 }
 
 .wheel-label.outer {
@@ -569,7 +574,7 @@ a:focus-visible {
 .game-button,
 .soft-button {
   border: 0;
-  font-weight: 900;
+  font-weight: 750;
   cursor: pointer;
   transition: transform 0.16s ease, box-shadow 0.16s ease, opacity 0.16s ease;
 }
@@ -749,7 +754,7 @@ a:focus-visible {
   background: linear-gradient(90deg, #7eebc8 0%, #18b888 100%);
 }
 
-.activity-card.has-fill h3,
+.activity-card.has-fill .activity-title-name,
 .activity-card.has-fill .activity-stats {
   color: #fff;
   -webkit-text-stroke: 3px #000000;
@@ -758,6 +763,20 @@ a:focus-visible {
     0 -1.55px 0 #17151d,
     1.55px 0 0 #17151d,
     -1.55px 0 0 #17151d;
+}
+
+.activity-card.has-fill h3 {
+  color: #fff;
+}
+
+.activity-card.has-fill .activity-title-emoji {
+  color: #fff;
+  -webkit-text-stroke: 1.5px #000000;
+  paint-order: stroke fill;
+  text-shadow: 0 0.78px 0 #17151d,
+    0 -0.78px 0 #17151d,
+    0.78px 0 0 #17151d,
+    -0.78px 0 0 #17151d;
 }
 
 .activity-card::after {
@@ -794,6 +813,8 @@ a:focus-visible {
 }
 
 .activity-card.is-reserved h3,
+.activity-card.is-reserved .activity-title-name,
+.activity-card.is-reserved .activity-title-emoji,
 .activity-card.is-reserved .activity-stats {
   color: #9890a8;
   -webkit-text-stroke: 0;
@@ -808,8 +829,12 @@ a:focus-visible {
 }
 
 .activity-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
   margin: 0;
   font-size: 1.05rem;
+  font-family: ui-rounded, "Nunito", "Avenir Next", system-ui, sans-serif;
 }
 
 .order-button,
@@ -843,20 +868,23 @@ a:focus-visible {
 .toggle-track {
   position: relative;
   display: block;
-  width: 38px;
+  width: 35px;
   height: 22px;
   background: #cfc6d8;
+  border: 2px solid #17151d;
   border-radius: 999px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
   transition: background 0.2s ease;
 }
 
 .toggle-thumb {
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 16px;
-  height: 16px;
+  top: -1px;
+  left: -2px;
+  width: 20px;
+  height: 20px;
   background: white;
+  border: 2px solid #17151d;
   border-radius: 50%;
   box-shadow: 0 1px 4px rgba(48, 23, 95, 0.22);
   transition: transform 0.2s ease;
@@ -867,7 +895,7 @@ a:focus-visible {
 }
 
 .toggle-switch input:checked + .toggle-track .toggle-thumb {
-  transform: translateX(16px);
+  transform: translateX(15px);
 }
 
 .toggle-switch input:focus-visible + .toggle-track {
@@ -895,6 +923,7 @@ a:focus-visible {
   gap: 10px;
   margin-top: 14px;
   color: var(--muted);
+  font-family: ui-rounded, "Nunito", "Avenir Next", system-ui, sans-serif;
   font-size: 1rem;
   font-weight: 650;
 }
@@ -1467,7 +1496,7 @@ select:focus {
   right: 18px;
   bottom: 18px;
   display: grid;
-  width: min(360px, calc(100% - 36px));
+  width: min(500px, calc(100% - 36px));
   gap: 9px;
 }
 
