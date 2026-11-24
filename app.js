@@ -503,6 +503,9 @@ function activityCard(activity) {
 
   const reserved = activity.banned;
   const fillable = Boolean(target);
+  const roomForManualAdd = optional && activity.dailyCap != null
+    ? Math.max(0, activity.dailyCap - actual)
+    : 5;
   return `
     <article class="activity-card ${optional ? "optional" : ""}${fillable ? " has-fill" : ""}${reserved ? " is-reserved" : ""}"${fillable ? ` style="--fill:${percentage}%" aria-label="${percentage} %"` : ""}>
       <div class="activity-card-top">
@@ -510,7 +513,13 @@ function activityCard(activity) {
         ${activityToggleMarkup(activity)}
       </div>
       <div class="activity-stats">
-        <span>${primary}</span>
+        <span class="activity-stat-main">
+          <span>${primary}</span>
+          <button type="button" class="manual-time-button" data-add-five="${escapeHtml(activity.id)}"
+            aria-label="Ajouter 5 minutes consacrées à ${escapeHtml(activity.name)}"
+            title="Ajouter 5 minutes consacrées"
+            ${roomForManualAdd <= 0 ? "disabled" : ""}>+5 min</button>
+        </span>
         <span>${secondary}</span>
       </div>
     </article>
@@ -571,7 +580,7 @@ function renderHistory() {
             <li class="session-row">
               <time>${time}</time>
               <span><strong>${escapeHtml(session.activityName)}</strong>
-                <small>Prévu ${formatFriendly(session.plannedMinutes)}</small></span>
+                <small>${session.manual ? "Ajout manuel" : `Prévu ${formatFriendly(session.plannedMinutes)}`}</small></span>
               <span class="session-duration">${formatFriendly(session.actualMinutes)}</span>
             </li>`;
         })
@@ -803,6 +812,37 @@ function tick() {
     $("timerMessage").textContent =
       "Temps prévu dépassé : le chrono continue jusqu’à ta clôture.";
   }
+}
+
+function addManualMinutes(id) {
+  const activity = activityById(id);
+  if (!activity || activity.banned) return;
+  const actual = Logic.actualMinutesDone(activity, state.sessions, currentDay);
+  const remainingCap =
+    activity.category === Logic.CATEGORY_OPTIONAL && activity.dailyCap != null
+      ? Math.max(0, activity.dailyCap - actual)
+      : 5;
+  const addedMinutes = Math.min(5, remainingCap);
+  if (addedMinutes <= 0) {
+    showToast(`« ${activity.name} » a atteint son plafond quotidien.`);
+    return;
+  }
+  const now = new Date();
+  state.sessions.push({
+    id: makeId("ajout-manuel"),
+    date: currentDay,
+    activityId: activity.id,
+    activityName: activity.name,
+    category: activity.category,
+    plannedMinutes: addedMinutes,
+    actualMinutes: addedMinutes,
+    startedAt: now.toISOString(),
+    endedAt: now.toISOString(),
+    manual: true,
+  });
+  persistState();
+  setMessage(`${formatFriendly(addedMinutes)} consacrées ajoutées à « ${activity.name} ».`);
+  renderAll();
 }
 
 function banActivity(id) {
@@ -1570,6 +1610,7 @@ function initEvents() {
       deleteProfile(button.dataset.deleteProfile);
       return;
     }
+    if (button.dataset.addFive) addManualMinutes(button.dataset.addFive);
     if (button.dataset.moveUp) moveActivity(button.dataset.moveUp, -1);
     if (button.dataset.moveDown) moveActivity(button.dataset.moveDown, 1);
     if (button.dataset.delete) {
