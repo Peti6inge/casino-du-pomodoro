@@ -558,6 +558,14 @@ a:focus-visible {
   color: rgba(255, 255, 255, 0.7);
 }
 
+.timer-stage.is-paused .timer-ring {
+  background: conic-gradient(rgba(255, 224, 123, 0.45) var(--timer-progress, 0%), rgba(255, 255, 255, 0.12) 0);
+}
+
+.timer-stage.is-paused .timer {
+  opacity: 0.72;
+}
+
 #timerMessage {
   margin: 12px 0 0;
   color: rgba(255, 255, 255, 0.76);
@@ -609,6 +617,22 @@ a:focus-visible {
 }
 
 .game-button-start {
+  color: #075c4c;
+  background: linear-gradient(#7aefd0, #3ed6af);
+  box-shadow: 0 6px 0 #159879;
+}
+
+.game-button-pause {
+  min-width: 3.6rem;
+  padding-inline: 16px;
+  color: #3d2d78;
+  letter-spacing: 0.14em;
+  background: linear-gradient(#f3ecff, #d8c8ff);
+  box-shadow: 0 6px 0 #9a82d4;
+}
+
+.game-button-pause.is-paused {
+  letter-spacing: 0;
   color: #075c4c;
   background: linear-gradient(#7aefd0, #3ed6af);
   box-shadow: 0 6px 0 #159879;
@@ -1616,11 +1640,17 @@ select:focus {
   }
 
   .primary-actions {
-    display: grid;
+    display: flex;
   }
 
   .game-button {
-    width: 100%;
+    width: auto;
+    flex: 1 1 8rem;
+  }
+
+  .primary-actions .game-button-pause {
+    flex: 0 0 auto;
+    width: auto;
   }
 
   .section-heading {

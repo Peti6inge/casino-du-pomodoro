@@ -459,13 +459,24 @@ function renderDraw() {
 
   $("wheelArena").hidden = running;
   $("drawResult").hidden = !hasChoice;
+  const paused = Boolean(state.activeSession?.pausedAt);
   $("timerStage").hidden = !running;
+  $("timerStage").classList.toggle("is-paused", running && paused);
   $("btnDraw").disabled = running || wheelSpinning;
   $("btnStart").disabled = !state.activeDraw || running || wheelSpinning;
+  $("btnPause").disabled = !running;
   $("btnValidate").disabled = !running;
   $("btnDraw").hidden = Boolean(state.activeDraw) || running;
   $("btnStart").hidden = !state.activeDraw || running;
+  $("btnPause").hidden = !running;
   $("btnValidate").hidden = !running;
+  $("btnPause").textContent = paused ? "▶" : "||";
+  $("btnPause").classList.toggle("is-paused", paused);
+  $("btnPause").setAttribute("aria-pressed", paused ? "true" : "false");
+  $("btnPause").setAttribute(
+    "aria-label",
+    paused ? "Reprendre la session" : "Mettre la session en pause"
+  );
 
   refreshWheelFromState();
 
@@ -723,6 +734,30 @@ async function requestDraw() {
   renderAll();
 }
 
+function sessionElapsedMs(session, now = Date.now()) {
+  const started = new Date(session.startedAt).getTime();
+  const pausedMs = Math.max(0, Number(session.pausedMs) || 0);
+  const openPause = session.pausedAt
+    ? Math.max(0, now - new Date(session.pausedAt).getTime())
+    : 0;
+  return Math.max(0, now - started - pausedMs - openPause);
+}
+
+function togglePause() {
+  const active = state.activeSession;
+  if (!active) return;
+  if (active.pausedAt) {
+    const pausedFor = Date.now() - new Date(active.pausedAt).getTime();
+    active.pausedMs = (Number(active.pausedMs) || 0) + Math.max(0, pausedFor);
+    active.pausedAt = null;
+  } else {
+    active.pausedAt = new Date().toISOString();
+  }
+  persistState();
+  renderAll();
+  tick();
+}
+
 function startSession() {
   if (!state.activeDraw || state.activeSession) return;
   const now = new Date();
@@ -755,7 +790,7 @@ function finishSession() {
     return;
   }
   const endedAt = new Date();
-  const elapsed = endedAt.getTime() - new Date(active.startedAt).getTime();
+  const elapsed = sessionElapsedMs(active, endedAt.getTime());
   const actualMinutes = Math.max(1, Math.round(elapsed / 60000));
   state.sessions.push({
     id: makeId("session"),
@@ -789,15 +824,14 @@ function tick() {
     return;
   }
 
-  const elapsed = Math.max(
-    0,
-    Date.now() - new Date(state.activeSession.startedAt).getTime()
-  );
+  const elapsed = sessionElapsedMs(state.activeSession);
+  const paused = Boolean(state.activeSession.pausedAt);
   const target = state.activeSession.plannedMinutes * 60000;
   const warningAt = Math.max(0, target - 60000);
   const remaining = Math.max(0, target - elapsed);
+  const plannedLabel = formatFriendly(state.activeSession.plannedMinutes);
   $("timerDisplay").textContent = formatTimer(remaining);
-  $("timerTarget").textContent = `sur ${formatFriendly(state.activeSession.plannedMinutes)}`;
+  $("timerTarget").textContent = paused ? `en pause · sur ${plannedLabel}` : `sur ${plannedLabel}`;
   $("timerRing").style.setProperty(
     "--timer-progress",
     `${Math.min(100, (remaining / target) * 100)}%`
@@ -1564,6 +1598,7 @@ function initEvents() {
   });
   $("btnDraw").addEventListener("click", requestDraw);
   $("btnStart").addEventListener("click", startSession);
+  $("btnPause").addEventListener("click", togglePause);
   $("btnValidate").addEventListener("click", finishSession);
   $("btnNotifications").addEventListener("click", () => requestNotificationPermission(true));
   $("btnExport").addEventListener("click", downloadCsv);
