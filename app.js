@@ -496,7 +496,7 @@ function renderDraw() {
     }
     $("drawIcon").textContent = optional ? "◆" : "✦";
     $("drawIcon").classList.toggle("optional", optional);
-    $("urgentBadge").hidden = !draw.urgent;
+    $("urgentBadge").hidden = !(draw.absolute ?? draw.urgent);
   }
 }
 
@@ -728,6 +728,7 @@ async function requestDraw() {
     category: result.category,
     plannedMinutes: result.plannedMinutes,
     urgent: result.urgent,
+    absolute: result.absolute,
     drawnAt: new Date().toISOString(),
   };
   persistState();

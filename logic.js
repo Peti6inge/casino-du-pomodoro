@@ -156,6 +156,19 @@
     return values[Math.min(values.length - 1, Math.floor(random() * values.length))];
   }
 
+  function reachableRequired(required, sessions, day, available) {
+    const reachable = [];
+    let used = 0;
+    for (const activity of required) {
+      const remaining = requiredRemaining(activity, sessions, day);
+      if (used + remaining > available) break;
+      reachable.push(activity);
+      used += remaining;
+    }
+    if (!reachable.length && required.length) return [required[0]];
+    return reachable;
+  }
+
   function eligibleDrawPools(
     activities,
     sessions,
@@ -187,7 +200,19 @@
       0
     );
     const urgent = Boolean(required.length && totalRequired > available);
-    return { day, available, active, required, optional, totalRequired, urgent };
+    const reachable = urgent
+      ? reachableRequired(required, sessions, day, available)
+      : required;
+    return {
+      day,
+      available,
+      active,
+      required: urgent ? reachable : required,
+      optional: urgent ? [] : optional,
+      totalRequired,
+      urgent,
+      absolute: urgent && reachable.length === 1,
+    };
   }
 
   function activityWheelSegments({
@@ -197,17 +222,9 @@
     lastOptionalActivityId = null,
     now = new Date(),
   }) {
-    const { day, available, active, required, optional, totalRequired, urgent } =
+    const { day, available, active, required, optional, totalRequired } =
       eligibleDrawPools(activities, sessions, settings, lastOptionalActivityId, now);
     if (!required.length && !optional.length) return [];
-
-    if (urgent) {
-      return required.map((activity, index) => ({
-        activity,
-        category: activity.category,
-        probability: index === 0 ? 1 : 0,
-      })).filter((segment) => segment.probability > 0);
-    }
 
     let probabilityRequired = 0;
     if (!required.length) probabilityRequired = 0;
@@ -292,7 +309,7 @@
       return { ok: false, reason: "pause", available };
     }
 
-    const { day, available, active, required, optional, totalRequired, urgent } =
+    const { day, available, active, required, optional, totalRequired, urgent, absolute } =
       eligibleDrawPools(activities, sessions, settings, lastOptionalActivityId, now);
 
     if (available <= 0) return { ok: false, reason: "day-ended", available };
@@ -301,9 +318,7 @@
     }
 
     let category;
-    if (urgent) {
-      category = CATEGORY_REQUIRED;
-    } else if (!required.length) {
+    if (!required.length) {
       category = CATEGORY_OPTIONAL;
     } else if (!optional.length) {
       category = CATEGORY_REQUIRED;
@@ -316,13 +331,11 @@
     let activity;
     let remaining;
     if (category === CATEGORY_REQUIRED) {
-      activity = urgent
-        ? required[0]
-        : weightedPick(
-            required,
-            (candidate) => requiredRemaining(candidate, sessions, day),
-            random
-          );
+      activity = weightedPick(
+        required,
+        (candidate) => requiredRemaining(candidate, sessions, day),
+        random
+      );
       remaining = requiredRemaining(activity, sessions, day);
     } else {
       if (optional.length > 1 && lastOptionalActivityId) {
@@ -364,6 +377,7 @@
       category,
       plannedMinutes,
       urgent,
+      absolute,
       available,
       totalRequired,
       requiredProbability:

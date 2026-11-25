@@ -61,7 +61,7 @@ test("plafonne une facultative à son reliquat même sous le minimum", () => {
   assert.deepEqual(Logic.validPlannedDurations(activity, 8, 100, settings), [8]);
 });
 
-test("force la première obligatoire lorsque toutes ne peuvent plus finir", () => {
+test("impose la première obligatoire lorsqu'elle est la seule à tenir dans le temps ouvrable", () => {
   const a = required("A", 40);
   const b = required("B", 40);
   const result = Logic.drawActivity({
@@ -73,6 +73,58 @@ test("force la première obligatoire lorsque toutes ne peuvent plus finir", () =
   });
   assert.equal(result.ok, true);
   assert.equal(result.urgent, true);
+  assert.equal(result.absolute, true);
+  assert.equal(result.category, "required");
+  assert.equal(result.activity.id, "A");
+});
+
+test("propose le préfixe prioritaire qui tient dans le temps ouvrable", () => {
+  const coqli = required("coqli", 33);
+  const noE = required("no-e", 180);
+  const video = required("video", 10);
+  const benevolat = required("benevolat", 15);
+  const outsider = required("outsider", 25);
+  const drawSettings = {
+    ...settings,
+    minSession: 20,
+    maxSession: 45,
+    pauseStart: "",
+    pauseEnd: "",
+    dayEnd: "13:55",
+  };
+  const now = new Date(2026, 10, 19, 10, 0);
+  const activities = [coqli, noE, video, benevolat, outsider, optional("libre")];
+  const params = { activities, sessions: [], settings: drawSettings, now };
+
+  const early = Logic.drawActivity({ ...params, random: () => 0 });
+  const late = Logic.drawActivity({ ...params, random: () => 0.99 });
+  assert.equal(early.urgent, true);
+  assert.equal(early.absolute, false);
+  assert.equal(early.available, 235);
+  assert.equal(early.activity.id, "coqli");
+  assert.equal(late.category, "required");
+  assert.equal(late.activity.id, "video");
+
+  const segments = Logic.activityWheelSegments(params);
+  const byId = Object.fromEntries(segments.map((segment) => [segment.activity.id, segment.probability]));
+  assert.deepEqual(Object.keys(byId), ["coqli", "no-e", "video"]);
+  assert.ok(Math.abs(byId.coqli - 33 / 223) < 0.001);
+  assert.ok(Math.abs(byId["no-e"] - 180 / 223) < 0.001);
+  assert.ok(Math.abs(byId.video - 10 / 223) < 0.001);
+});
+
+test("impose la première obligatoire lorsqu'elle dépasse à elle seule le temps ouvrable", () => {
+  const a = required("A", 80);
+  const b = required("B", 10);
+  const result = Logic.drawActivity({
+    activities: [a, b],
+    sessions: [],
+    settings: { ...settings, dayEnd: "10:50", pauseStart: "11:00", pauseEnd: "11:30" },
+    now: new Date(2026, 10, 19, 10, 0),
+    random: () => 0.99,
+  });
+  assert.equal(result.urgent, true);
+  assert.equal(result.absolute, true);
   assert.equal(result.activity.id, "A");
 });
 

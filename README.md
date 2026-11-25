@@ -27,7 +27,8 @@ Les notifications système nécessitent `localhost` ou HTTPS.
   ```
 
 - Dans cette catégorie, chaque activité est pondérée par son propre temps restant.
-- Si tous les objectifs ne peuvent plus être terminés avant la fin de journée, la première activité obligatoire active et inachevée est imposée jusqu’à sa complétion.
+- Si tous les objectifs ne peuvent plus être terminés avant la fin de journée, les activités facultatives sortent du tirage. Les obligatoires restent candidates dans l’ordre de priorité, tant que leur cumul tient dans le temps ouvrable. Les suivantes sont écartées. Si même la première ne tient pas dans le temps restant, elle reste seule au tirage.
+- Dans ce sous-ensemble, comme hors urgence, chaque obligatoire est pondérée par son temps restant. Le badge « Priorité absolue » n’apparaît que lorsqu’une seule obligatoire reste atteignable.
 
 ### Activités facultatives
 
