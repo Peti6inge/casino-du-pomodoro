@@ -375,9 +375,9 @@ a:focus-visible {
   width: 0;
   height: 0;
   content: "";
-  border-right: 7px solid transparent;
-  border-bottom: 17px solid #18141f;
-  border-left: 7px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 13px solid #5f3acf;
+  border-left: 6px solid transparent;
   transform: translateX(-50%);
 }
 
@@ -413,7 +413,7 @@ a:focus-visible {
   width: 0;
   height: 0;
   content: "";
-  border-top: 12px solid #18141f;
+  border-top: 10px solid #482aa4;
   border-right: 8px solid transparent;
   border-left: 8px solid transparent;
   transform: translateX(-50%);
